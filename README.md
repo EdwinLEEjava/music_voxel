@@ -4,22 +4,28 @@
 
 ## 运行
 
-项目使用浏览器原生 ES Modules + importmap，**不需要安装和打包**。
-因为浏览器不允许直接用 `file://` 加载模块，需要起一个本地静态服务器：
+**最简单：双击 `play.html`**，用浏览器打开即可，不需要安装任何东西。
 
-```bash
-cd music_voxel
-python3 -m http.server 8000      # 或 npx serve
-# 打开 http://localhost:8000
-```
+`play.html` 是把 `src/` 下所有模块合并后的单文件版本，由构建脚本自动生成，**不要直接修改它**。
 
-three.js 从 CDN 加载（版本在 `index.html` 的 importmap 里），所以运行时需要联网。
+### 开发流程
+
+1. 修改 `src/` 里的模块（参数基本都在 `src/config.js`）
+2. 重新生成 `play.html`：`node tools/build.mjs`（需要 Node.js）
+3. 刷新浏览器里的 `play.html`
+
+如果想直接用模块版 `index.html` 调试，需要一个本地静态服务器（浏览器不允许 `file://` 加载模块），
+例如 VS Code 的 Live Server 插件，或 `npx serve`。
+
+three.js 从 CDN 加载（版本在 importmap 里），所以运行时需要联网。
 
 ## 目录结构
 
 ```
 voxel-water/
-├── index.html          页面骨架：HUD 文字、importmap、入口脚本
+├── play.html           ★ 双击即玩的单文件版（自动生成，勿手改）
+├── index.html          模块版入口：HUD 文字、importmap、入口脚本
+├── tools/build.mjs     构建脚本：src/ → play.html
 ├── style.css           HUD / 提示文字样式
 └── src/
     ├── config.js       ★ 可调参数：水面高度、节奏、音量限制、配色、乐器表、组件形状

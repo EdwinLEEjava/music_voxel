@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>水中体素 Voxel Demo</title>
+<!-- 自动生成的文件，请不要直接修改：改 src/ 后运行 node tools/build.mjs -->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+  #hud {
+    position: fixed; left: 16px; bottom: 14px; color: rgba(255,255,255,.55);
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    pointer-events: none; user-select: none; letter-spacing: .04em;
+  }
+  #toast {
+    position: fixed; top: 18%; left: 50%; transform: translateX(-50%);
+    color: rgba(255,255,255,.75); font: 14px/1.6 system-ui, sans-serif; letter-spacing: .3em;
+    pointer-events: none; opacity: 0; transition: opacity .8s; white-space: nowrap;
+  }
+  #hint {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, 60px);
+    color: rgba(255,255,255,.4); font: 13px/1.6 system-ui, sans-serif;
+    pointer-events: none; transition: opacity 1.2s; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<div id="hint">左键放置 · 右键拆除 · 点远处水面让水波奏响结构 · 滚轮缩放</div>
+<div id="hud"><span id="count">0</span> 方块 · 右键 拆除 · Z 撤销 · R 重置 · 空格/点水面 播放 · M <span id="snd">声音开</span></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ======================= src/config.js =======================
+// ================= 可调参数（集中在这里修改） =================
+
+const WATER_Y = 0.15;
+const RIPPLE_N = 8;
+const WATER_SIZE = 240;
+const GROW_MAX = 64;
+const TOWER_MIN = 5;
+const WAVE_SPEED = 2.2;            // 与涟漪扩散速度一致
+const ECHO_GAP = 0.3;              // 回响中相邻两个音的间隔
+const VOXEL_COOLDOWN = 0.4;        // 同一方块两次发声的最短间隔
+const NOTE_WINDOW = 0.15, NOTE_WINDOW_MAX = 5;   // 每 0.15 秒最多 5 个音
+const TAP_FAR = 2.2;                 // 点击处离结构超过这个距离 → 敲水
+const ZMIN = 0.35, ZMAX = 3;
+const WHITE = new THREE.Color(1, 1, 1);
+const PAL = {
+  towerRed: new THREE.Color(0xc8402f), towerWhite: new THREE.Color(0xf2efe8), lamp: new THREE.Color(0xffd34d),
+  ring: new THREE.Color(0x5aa9c9),
+  archStone: new THREE.Color(0xbfae92), archBeam: new THREE.Color(0x8c5c3c), keystone: new THREE.Color(0xd9b45a),
+  bridge: new THREE.Color(0xa0714a), platform: new THREE.Color(0xdccca4),
+  anchor: new THREE.Color(0x4a5868), anchorTip: new THREE.Color(0x2a3038), stair: new THREE.Color(0x9fb59a),
+};
+const INST = {
+  bell:    { col: new THREE.Color(0xf2c14e), name: '管钟' },
+  glass:   { col: new THREE.Color(0x7fd6e8), name: '钢片琴' },
+  pluck:   { col: new THREE.Color(0xe08a5a), name: '吉他' },
+  marimba: { col: new THREE.Color(0xd2a86e), name: '马林巴' },
+  pad:     { col: new THREE.Color(0xc3b2e6), name: '弦乐' },
+  bass:    { col: new THREE.Color(0x4f7fd0), name: '贝斯' },
+  harp:    { col: new THREE.Color(0xa6d98f), name: '竖琴' },
+};
+const TYPE_INST = { tower: 'bell', ring: 'glass', arch: 'pluck', bridge: 'marimba', platform: 'pad', anchor: 'bass', stair: 'harp' };
+const SEED_SHAPES = [
+  [[0,0,0],[1,0,0],[0,0,1]], [[0,0,0],[1,0,0],[0,1,0]], [[0,0,0],[0,0,1],[0,1,0],[0,1,1]], [[0,0,0],[1,0,0],[2,0,0]],
+];
+
+// ======================= src/core.js =======================
+// ================= 场景 =================
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x000000, 20, 60);
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 2000);
+const VIEW_DIR = new THREE.Vector3(1, 0.85, 1.25).normalize();   // 固定视角方向
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x111111, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(4, 10, 6);
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0xffffff, 0.35);
+rim.position.set(-6, -2, -5);
+scene.add(rim);
+
+const clock = new THREE.Clock();
+
+// ======================= src/ui.js =======================
+// ================= 界面文字：提示、计数 =================
+const toastEl = document.getElementById('toast');
+let toastTimer = 0;
+function toast(text) {
+  toastEl.textContent = text; toastEl.style.opacity = 1;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toastEl.style.opacity = 0), 2200);
+}
+const hintEl = document.getElementById('hint'), countEl = document.getElementById('count'), sndEl = document.getElementById('snd');
+function updateHud() { countEl.textContent = voxels.length; }
+
+// ======================= src/water.js =======================
+// ================= 水：共享的波浪函数（水面与方块共用，保证水线一致） =================
+const U = {
+  uTime: { value: 0 },
+  uWaterY: { value: WATER_Y },
+  uRip: { value: Array.from({ length: RIPPLE_N }, () => new THREE.Vector4(0, 0, -99, 0)) }, // x, z, 开始时间, 强度
+};
+let ripIdx = 0;
+function addRipple(x, z, amp) {
+  U.uRip.value[ripIdx].set(x, z, U.uTime.value, amp);
+  ripIdx = (ripIdx + 1) % RIPPLE_N;
+}
+
+const WAVE_GLSL = /* glsl */`
+uniform float uTime;
+uniform float uWaterY;
+uniform vec4 uRip[${RIPPLE_N}];
+// 平滑值噪声：用来打破规则正弦波的重复感
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i), b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0)), d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+// 水面高度：两层缓慢漂移的噪声涌浪 + 几道方向、波长都不同的长波
+float waveBase(vec2 p) {
+  float t = uTime, h = 0.0;
+  h += 0.16 * vnoise(p * 0.16 + vec2( t * 0.10,  t * 0.06));
+  h += 0.07 * vnoise(p * 0.38 + vec2(-t * 0.17,  t * 0.13) + 7.3);
+  h += 0.06 * sin(dot(p, vec2( 0.80, 0.60)) * 0.55 + t * 0.70);
+  h += 0.04 * sin(dot(p, vec2(-0.45, 0.89)) * 0.83 + t * 0.95 + 1.7);
+  h += 0.025 * sin(dot(p, vec2( 0.97,-0.24)) * 1.31 + t * 1.30 + 4.1);
+  return h;
+}
+float ripples(vec2 p) {
+  float h = 0.0;
+  for (int i = 0; i < ${RIPPLE_N}; i++) {
+    vec4 r = uRip[i];
+    float age = uTime - r.z;
+    if (age < 0.0 || age > 7.0 || r.w <= 0.0) continue;
+    float d = length(p - r.xy);
+    float front = age * 2.2;
+    float df = d - front;
+    float env = exp(-df * df * 0.18) * exp(-age * 0.55);
+    h += r.w * 0.9 * env * sin(df * 2.4);   // 波长约 2.6 格，能被低多边形网格清晰表现
+  }
+  return h;
+}
+float waterH(vec2 p) { return waveBase(p) + ripples(p); }
+float caustic(vec2 p) {
+  float t = uTime * 0.8;
+  vec2 q = p * 1.6;
+  float c = sin(q.x + t + sin(q.y * 1.3 + t * 0.7))
+          + sin(q.y * 1.1 - t * 0.9 + sin(q.x * 1.7 - t * 0.5))
+          + sin((q.x + q.y) * 0.8 + t * 1.2);
+  c = abs(c) / 3.0;
+  return pow(1.0 - c, 6.0);
+}
+`;
+
+// —— 水面 ——
+const waterMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  uniforms: {
+    ...U,
+    uFade: { value: 30 },
+    uColorful: { value: 0 },
+    uCenter: { value: new THREE.Vector2() },
+    uGlint: { value: new THREE.Vector3(-0.55, 0.47, -0.69).normalize() },
+  },
+  // 低多边形：顶点在 GPU 上按波浪抬升；片元里用屏幕导数求“三角面”法线，
+  // 同一个三角形内法线恒定 → 每个面一个颜色，形成切面感
+  vertexShader: /* glsl */`
+    ${WAVE_GLSL}
+    varying vec3 vWP;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      wp.y = uWaterY + waterH(wp.xz);
+      vWP = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uFade;
+    uniform vec3 uGlint;
+    uniform vec3 uKey;
+    uniform float uColorful;
+    uniform vec2 uCenter;
+    varying vec3 vWP;
+    void main() {
+      vec3 N = normalize(cross(dFdx(vWP), dFdy(vWP)));
+      if (N.y < 0.0) N = -N;
+      vec3 V = normalize(cameraPosition - vWP);
+
+      // 低角度主光：让微小的坡度差也能拉开面与面之间的明暗
+      float lamb = dot(N, uKey);
+      float shade = clamp((lamb - 0.42) * 1.8 + 0.5, 0.0, 1.0);
+      // 世界的“色彩度”：从黑白慢慢过渡到深蓝青的夜海
+      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), uColorful);
+      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), uColorful);
+      vec3 col = mix(lo, hi, shade);
+
+      // 整面闪光：朝向“月光”的那些三角面整块亮起
+      float s = max(dot(reflect(-uGlint, N), V), 0.0);
+      col += mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03);
+
+      float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
+      col += fres * 0.05;
+
+      float fade = 1.0 - smoothstep(uFade * 0.35, uFade, length(vWP.xz - uCenter));
+      gl_FragColor = vec4(col, (0.82 + fres * 0.15) * fade);
+    }`,
+});
+waterMat.uniforms.uKey = { value: new THREE.Vector3(-0.75, 0.55, -0.35).normalize() };
+
+// 固定世界尺寸的网格（每格约 1 个方块宽），顶点随机错位 → 不规则三角面
+const waterGeo = new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, WATER_SIZE, WATER_SIZE).rotateX(-Math.PI / 2);
+{
+  const pa = waterGeo.attributes.position;
+  const half = WATER_SIZE / 2 - 0.5;
+  for (let i = 0; i < pa.count; i++) {
+    const x = pa.getX(i), z = pa.getZ(i);
+    if (Math.abs(x) >= half || Math.abs(z) >= half) continue;
+    pa.setX(i, x + (Math.random() - 0.5) * 0.7);
+    pa.setZ(i, z + (Math.random() - 0.5) * 0.7);
+  }
+}
+const water = new THREE.Mesh(waterGeo, waterMat);
+water.frustumCulled = false;
+water.renderOrder = 10;
+scene.add(water);
+
+// —— 让方块知道自己在水下：越深越暗、带焦散光纹，水线处有一圈亮边 ——
+function makeUnderwater(material) {
+  material.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, U);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
+      .replace('#include <project_vertex>', `#include <project_vertex>
+        vec4 wp4 = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          wp4 = instanceMatrix * wp4;
+        #endif
+        vWP = (modelMatrix * wp4).xyz;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\n' + WAVE_GLSL)
+      .replace('#include <fog_fragment>', `
+        float depth = (uWaterY + waterH(vWP.xz)) - vWP.y;
+        if (depth > 0.0) {
+          float k = exp(-depth * 0.22);
+          float c = caustic(vWP.xz + vWP.y * 0.3);
+          gl_FragColor.rgb = gl_FragColor.rgb * (0.35 + 0.65 * k) + c * 0.45 * k;
+        }
+        gl_FragColor.rgb += (1.0 - smoothstep(0.0, 0.04, abs(depth))) * 0.45;
+        #include <fog_fragment>`);
+  };
+}
+
+// ======================= src/world.js =======================
+// ================= 数据 =================
+// 所有方块共用一套整数格子坐标；每个“物块”(body) 是一组相连的方块，作为独立刚体漂浮
+const voxels = [];                 // 按放置顺序，供撤销使用
+const grid = new Map();            // "x,y,z" -> voxel {x,y,z,s,sv,born,merged,inst,col,body,lastPlay}
+const key = (x, y, z) => x + ',' + y + ',' + z;
+const NB = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+const S = (x, y, z) => grid.has(key(x, y, z));
+const bodies = new Set();
+
+const FACES = [
+  { n: [ 1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] }, { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0] },
+  { n: [ 0, 1, 0], u: [0, 0, 1], v: [1, 0, 0] }, { n: [ 0,-1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+  { n: [ 0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] }, { n: [ 0, 0,-1], u: [0, 1, 0], v: [1, 0, 0] },
+];
+const CORNERS = [[-1,-1],[1,-1],[1,1],[-1,1]];
+const AO_LEVEL = [0.42, 0.62, 0.82, 1.0];
+
+const solidMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0, vertexColors: true });
+makeUnderwater(solidMat);
+const growMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+makeUnderwater(growMat);
+const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+
+// ================= 物块（刚体） =================
+function createBody() {
+  const b = {
+    group: new THREE.Group(), content: new THREE.Group(), voxels: new Set(),
+    com: new THREE.Vector3(), smooth: new THREE.Vector3(),
+    tilt: new THREE.Vector3(), spin: new THREE.Vector3(), heave: 0, heaveV: 0, ph: Math.random() * 6.28,
+    mesh: new THREE.Mesh(new THREE.BufferGeometry(), solidMat),
+    grow: new THREE.InstancedMesh(boxGeo, growMat, GROW_MAX), dirty: true,
+  };
+  for (let i = 0; i < GROW_MAX; i++) b.grow.setColorAt(i, WHITE);
+  b.grow.count = 0; b.grow.frustumCulled = false;
+  b.mesh.userData.body = b.grow.userData.body = b;
+  b.group.add(b.content); b.content.add(b.mesh, b.grow);
+  scene.add(b.group); bodies.add(b);
+  return b;
+}
+function destroyBody(b) {
+  scene.remove(b.group); b.mesh.geometry.dispose(); b.grow.dispose(); bodies.delete(b);
+}
+function updateCom(b) {
+  b.com.set(0, 0, 0);
+  for (const v of b.voxels) { b.com.x += v.x; b.com.y += v.y; b.com.z += v.z; }
+  if (b.voxels.size) b.com.divideScalar(b.voxels.size);
+}
+function toWorld(v, out) { return v.body.content.localToWorld(out.set(v.x, v.y, v.z)); }
+const tmpT = new THREE.Matrix4();
+function voxelMatrix(v, out, dy = 0) { return out.multiplyMatrices(v.body.content.matrixWorld, tmpT.makeTranslation(v.x, v.y + dy, v.z)); }
+
+// 只生成暴露在外的面，带体素 AO，按方块颜色着色
+function rebuildBody(b) {
+  const P = [], N = [], C = [], I = [];
+  const solid = (x, y, z) => { const v = grid.get(key(x, y, z)); return !!(v && v.merged && v.body === b); };
+  for (const vx of b.voxels) {
+    if (!vx.merged) continue;
+    const { x, y, z } = vx, c = vx.col || WHITE;
+    for (const f of FACES) {
+      const [nx, ny, nz] = f.n;
+      if (solid(x + nx, y + ny, z + nz)) continue;
+      const base = P.length / 3, ao = [];
+      for (const [su, sv] of CORNERS) {
+        const ux = f.u[0] * su, uy = f.u[1] * su, uz = f.u[2] * su;
+        const wx = f.v[0] * sv, wy = f.v[1] * sv, wz = f.v[2] * sv;
+        P.push(x + (nx + ux + wx) * 0.5, y + (ny + uy + wy) * 0.5, z + (nz + uz + wz) * 0.5);
+        N.push(nx, ny, nz);
+        const s1 = solid(x + nx + ux, y + ny + uy, z + nz + uz), s2 = solid(x + nx + wx, y + ny + wy, z + nz + wz);
+        const cc = solid(x + nx + ux + wx, y + ny + uy + wy, z + nz + uz + wz);
+        const a = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc);
+        ao.push(a);
+        const k = AO_LEVEL[a];
+        C.push(k * c.r, k * c.g, k * c.b);
+      }
+      if (ao[0] + ao[2] >= ao[1] + ao[3]) I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      else I.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  g.setIndex(I);
+  g.computeBoundingSphere();
+  b.mesh.geometry.dispose();
+  b.mesh.geometry = g;
+  b.dirty = false;
+}
+
+function mergeInto(b, o) {
+  for (const v of o.voxels) { v.body = b; b.voxels.add(v); }
+  destroyBody(o);
+  updateCom(b); b.dirty = true;
+}
+
+// 拆除后检查连通性：断开的部分各自成为新的物块，继承原来的姿态
+function splitBody(b) {
+  if (!b.voxels.size) { destroyBody(b); return; }
+  const left = new Set(b.voxels), comps = [];
+  while (left.size) {
+    const start = left.values().next().value, comp = [start], st = [start];
+    left.delete(start);
+    while (st.length) {
+      const v = st.pop();
+      for (const [dx, dy, dz] of NB) {
+        const n = grid.get(key(v.x + dx, v.y + dy, v.z + dz));
+        if (n && left.has(n)) { left.delete(n); comp.push(n); st.push(n); }
+      }
+    }
+    comps.push(comp);
+  }
+  comps.sort((a, c) => c.length - a.length);
+  for (let i = 1; i < comps.length; i++) {
+    const nb = createBody();
+    nb.tilt.copy(b.tilt); nb.spin.copy(b.spin); nb.heave = b.heave; nb.ph = b.ph;
+    for (const v of comps[i]) { b.voxels.delete(v); v.body = nb; nb.voxels.add(v); }
+    updateCom(nb);
+    nb.smooth.set(nb.com.x, b.smooth.y, nb.com.z);   // 高度从原来的位置开始，再慢慢浮到新平衡
+    nb.spin.x += (Math.random() - 0.5) * 0.4; nb.spin.z += (Math.random() - 0.5) * 0.4;
+  }
+  updateCom(b); b.dirty = true;
+}
+
+function impulse(b, v) {
+  const n = b.voxels.size, k = 0.55 / (1 + n * 0.12);
+  b.spin.x += (v.z - b.com.z) * k;
+  b.spin.z += -(v.x - b.com.x) * k;
+  b.spin.y += (Math.random() - 0.5) * k * 0.6;
+  b.heaveV -= 1.2 / (1 + n * 0.08);
+}
+
+// ================= 放置 / 拆除 =================
+const tmpW = new THREE.Vector3();
+function addVoxel(x, y, z, inst = null, opts = {}) {
+  if (S(x, y, z)) return null;
+  const touching = new Set();
+  for (const [dx, dy, dz] of NB) { const n = grid.get(key(x + dx, y + dy, z + dz)); if (n) touching.add(n.body); }
+  let b;
+  if (touching.size) {
+    b = [...touching].sort((a, c) => c.voxels.size - a.voxels.size)[0];
+    for (const o of touching) if (o !== b) mergeInto(b, o);     // 连接两个物块 → 合并
+  } else b = opts.body || createBody();
+  const v = { x, y, z, s: 0, sv: 0, born: clock.elapsedTime, merged: false, inst, col: null, body: b, lastPlay: -9 };
+  grid.set(key(x, y, z), v); voxels.push(v); b.voxels.add(v);
+  updateCom(b);
+  if (b.voxels.size === 1) { b.smooth.copy(b.com); b.group.position.set(b.com.x, 0, b.com.z); b.content.position.copy(b.com).negate(); b.group.updateMatrixWorld(true); }
+  if (!opts.silent) {
+    impulse(b, v);
+    toWorld(v, tmpW);
+    addRipple(tmpW.x, tmpW.z, 0.05 + 0.13 * Math.exp(-Math.abs(tmpW.y - WATER_Y) * 0.35));
+    sfx.place(v, tmpW);
+  }
+  updateFeatures(!opts.silent);
+  if (!opts.silent) queueEcho(v);
+  updateBounds(); updateHud();
+  return v;
+}
+
+function removeVoxel(v) {
+  const i = voxels.indexOf(v);
+  if (i < 0) return;
+  toWorld(v, tmpW);
+  voxels.splice(i, 1);
+  grid.delete(key(v.x, v.y, v.z));
+  const b = v.body;
+  b.voxels.delete(v);
+  b.heaveV += 0.6 / (1 + b.voxels.size * 0.08);
+  splitBody(b);
+  addRipple(tmpW.x, tmpW.z, 0.06);
+  sfx.undo();
+  updateFeatures(false); updateBounds(); updateHud();
+}
+function removeLast() { if (voxels.length) removeVoxel(voxels[voxels.length - 1]); }
+
+function resetAll() {
+  for (const b of [...bodies]) destroyBody(b);
+  voxels.length = 0; grid.clear();
+  noteQueue.length = 0; bubbles.length = 0; flashes.length = 0;
+  addRipple(view.x, view.z, 0.15);
+  sfx.undo();
+  updateFeatures(false); updateBounds(); updateHud();
+}
+
+// 全局范围：相机目标与距离
+const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
+let spanR = 0;
+function updateBounds() {
+  if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const v of voxels) {
+    x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z);
+    y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y);
+  }
+  viewTarget.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
+  spanR = Math.max(Math.hypot(x1 - x0, z1 - z0) / 2, (y1 - y0) / 2);
+}
+
+// 音高：高度决定音阶级数，x+z 奇偶再错开两级；整体限制在中音区
+function noteStep(v) {
+  return Math.max(0, Math.min(11, 5 + v.y + (((v.x + v.z) % 2 + 2) % 2) * 2));
+}
+
+// ======================= src/audio.js =======================
+// ================= 音效 =================
+const sfx = (() => {
+  let ctx = null, master = null, wet = null, dry = null, busClear = null, busMuffled = null, muted = false;
+  const voices = [], MAX_VOICES = 24, PENTA = [0, 2, 4, 7, 9];
+  const TONE_PARTS = [[1, 'sine', 1], [2, 'sine', 0.2], [3, 'triangle', 0.05]];   // 默认白色方块：柔和的水滴音
+  const ksCache = new Map();
+
+  function init() {
+    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC();
+    master = ctx.createGain(); master.gain.value = 0.6;
+    const comp = ctx.createDynamicsCompressor();
+    master.connect(comp); comp.connect(ctx.destination);
+    const len = ctx.sampleRate * 3.2, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+    const conv = ctx.createConvolver(); conv.buffer = ir;
+    wet = ctx.createGain(); wet.gain.value = 0.45;
+    dry = ctx.createGain(); dry.gain.value = 0.8;
+    wet.connect(conv); conv.connect(master); dry.connect(master);
+    busClear = ctx.createBiquadFilter(); busClear.type = 'lowpass'; busClear.frequency.value = 4500;
+    busMuffled = ctx.createBiquadFilter(); busMuffled.type = 'lowpass'; busMuffled.frequency.value = 900;
+    for (const b of [busClear, busMuffled]) { b.connect(dry); b.connect(wet); }
+  }
+  // 登记声部：结束后断开节点；超过上限时淡出最旧的
+  function register(g, nodes, sources, end) {
+    const now = ctx.currentTime;
+    for (let i = voices.length - 1; i >= 0; i--) if (voices[i].end < now) voices.splice(i, 1);
+    while (voices.length >= MAX_VOICES) {
+      const old = voices.shift();
+      try {
+        old.g.gain.cancelScheduledValues(now);
+        old.g.gain.setValueAtTime(old.g.gain.value, now);
+        old.g.gain.linearRampToValueAtTime(0, now + 0.05);
+        old.sources.forEach(s => s.stop(now + 0.06));
+      } catch (e) {}
+    }
+    voices.push({ g, end, sources });
+    let left = sources.length;
+    sources.forEach(s => s.onended = () => { if (--left === 0) nodes.forEach(n => { try { n.disconnect(); } catch (e) {} }); });
+  }
+  function out(pan, underwater, nodes) {
+    const g = ctx.createGain();
+    const bus = underwater ? busMuffled : busClear;
+    if (ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-0.8, Math.min(0.8, pan));
+      g.connect(p); p.connect(bus); nodes.push(p);
+    } else g.connect(bus);
+    nodes.push(g);
+    return g;
+  }
+  function bubble(t, pan, uw, f0 = 260, f1 = 720, vol = 0.35) {
+    const nodes = [], g = out(pan, uw, nodes), o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + 0.09);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g); nodes.push(o);
+    o.start(t); o.stop(t + 0.2);
+    register(g, nodes, [o], t + 0.2);
+  }
+  // ———— 乐器 ————
+  // 每种乐器用各自的发声原理合成：拨弦算法 / FM 金属 / 敲击 / 弓弦
+  function tone(t, freq, pan, uw, vol = 0.22, decay = 1.8, inst = 'tone') {
+    const f = INSTRUMENTS[inst] || INSTRUMENTS.tone;
+    f(t, freq, pan, uw, vol, decay);
+  }
+
+  // 包络增益：起音 a 秒到 vol，再在 d 秒内衰减
+  function env(g, t, vol, a, d) {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + a + d);
+  }
+  function osc(type, freq, t, end, nodes, srcs) {
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.value = freq;
+    o.start(t); o.stop(end);
+    nodes.push(o); srcs.push(o);
+    return o;
+  }
+
+  // Karplus-Strong 拨弦：一段噪声在延迟环里反复平均衰减 → 真实的琴弦振动
+  function ksBuffer(freq, damp, smooth, dur) {
+    const k = `${Math.round(freq)}:${damp}:${smooth}:${dur}`;
+    if (ksCache.has(k)) return ksCache.get(k);
+    const sr = ctx.sampleRate, N = Math.max(2, Math.round(sr / freq)), len = Math.floor(sr * dur);
+    const buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0), ring = new Float32Array(N);
+    for (let i = 0; i < N; i++) ring[i] = Math.random() * 2 - 1;
+    for (let p = 0; p < smooth; p++) for (let i = 1; i < N; i++) ring[i] = (ring[i] + ring[i - 1]) * 0.5;   // 拨片越软，初始噪声越圆润
+    let idx = 0;
+    for (let i = 0; i < len; i++) {
+      const nx = (idx + 1) % N;
+      d[i] = ring[idx];
+      ring[idx] = damp * 0.5 * (ring[idx] + ring[nx]);
+      idx = nx;
+    }
+    // 归一化 + 末尾淡出
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
+    const fade = Math.floor(sr * 0.05);
+    for (let i = 0; i < len; i++) d[i] = d[i] / (peak || 1) * (i > len - fade ? (len - i) / fade : 1);
+    if (ksCache.size > 120) ksCache.delete(ksCache.keys().next().value);
+    ksCache.set(k, buf);
+    return buf;
+  }
+  function pluck(t, freq, pan, uw, vol, damp, smooth, dur, tonePart = 0) {
+    const nodes = [], srcs = [], g = out(pan, uw, nodes);
+    const s = ctx.createBufferSource();
+    s.buffer = ksBuffer(freq, damp, smooth, dur);
+    g.gain.value = vol;
+    s.connect(g); s.start(t); nodes.push(s); srcs.push(s);
+    if (tonePart) {   // 给低音加一点纯净的基音，让它更厚
+      const o = osc('sine', freq, t, t + dur, nodes, srcs), og = ctx.createGain();
+      env(og, t, vol * tonePart, 0.005, dur * 0.7);
+      o.connect(og); og.connect(g); nodes.push(og);
+    }
+    register(g, nodes, srcs, t + dur);
+  }
+
+  // FM 合成：调制器频率与载波不成整数比 → 金属的不和谐泛音
+  function fm(t, freq, pan, uw, vol, ratio, index, idxDecay, ampDecay, extra = []) {
+    const nodes = [], srcs = [], g = out(pan, uw, nodes), end = t + ampDecay + 0.1;
+    const car = osc('sine', freq, t, end, nodes, srcs), mod = osc('sine', freq * ratio, t, end, nodes, srcs);
+    const mg = ctx.createGain(); nodes.push(mg);
+    mg.gain.setValueAtTime(freq * index, t);
+    mg.gain.exponentialRampToValueAtTime(freq * 0.05, t + idxDecay);
+    mod.connect(mg); mg.connect(car.frequency);
+    env(g, t, vol, 0.003, ampDecay);
+    car.connect(g);
+    for (const [mul, amp, dec] of extra) {
+      const o = osc('sine', freq * mul, t, end, nodes, srcs), og = ctx.createGain();
+      env(og, t, amp, 0.003, dec); o.connect(og); og.connect(g); nodes.push(og);
+    }
+    register(g, nodes, srcs, end);
+  }
+
+  const INSTRUMENTS = {
+    // 白色方块：柔和的水滴音
+    tone(t, freq, pan, uw, vol, decay) {
+      const nodes = [], srcs = [], g = out(pan, uw, nodes);
+      env(g, t, vol, 0.02, decay);
+      for (const [mul, type, v] of TONE_PARTS) {
+        const o = osc(type, freq * mul, t, t + decay + 0.1, nodes, srcs), og = ctx.createGain();
+        o.detune.value = (Math.random() - 0.5) * 6; og.gain.value = v;
+        o.connect(og); og.connect(g); nodes.push(og);
+      }
+      register(g, nodes, srcs, t + decay + 0.1);
+    },
+    // 吉他：拨弦，中等阻尼，拨片略软
+    pluck(t, freq, pan, uw, vol) { pluck(t, freq, pan, uw, vol * 1.3, 0.994, 2, 1.3); },
+    // 竖琴：更亮、余音更长
+    harp(t, freq, pan, uw, vol) { pluck(t, freq, pan, uw, vol * 1.2, 0.998, 0, 2.2); },
+    // 贝斯：低八度的粗弦，圆润厚实
+    bass(t, freq, pan, uw, vol) { pluck(t, freq / 2, pan, uw, vol * 1.5, 0.996, 5, 1.6, 0.5); },
+    // 管钟：FM 金属钟，长余音
+    bell(t, freq, pan, uw, vol) { fm(t, freq, pan, uw, vol * 0.9, 1.4, 6, 1.8, 3.2, [[2.0, vol * 0.25, 2.2]]); },
+    // 钢片琴：清脆短促的金属片
+    glass(t, freq, pan, uw, vol) { fm(t, freq * 2 > 1100 ? freq : freq * 2, pan, uw, vol * 0.8, 3.5, 1.6, 0.25, 1.2); },
+    // 马林巴：木头共鸣（基音 + 3.9 倍泛音）+ 木槌敲击声
+    marimba(t, freq, pan, uw, vol) {
+      const nodes = [], srcs = [], g = out(pan, uw, nodes), end = t + 0.9;
+      const a = osc('sine', freq, t, end, nodes, srcs), ag = ctx.createGain();
+      env(ag, t, vol * 1.3, 0.002, 0.7); a.connect(ag); ag.connect(g);
+      const b = osc('sine', freq * 3.93, t, end, nodes, srcs), bg = ctx.createGain();
+      env(bg, t, vol * 0.4, 0.001, 0.12); b.connect(bg); bg.connect(g);
+      const len = Math.floor(ctx.sampleRate * 0.02), nb = ctx.createBuffer(1, len, ctx.sampleRate), nd = nb.getChannelData(0);
+      for (let i = 0; i < len; i++) nd[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      const ns = ctx.createBufferSource(); ns.buffer = nb;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq * 6; bp.Q.value = 2;
+      const ngn = ctx.createGain(); ngn.gain.value = vol * 0.6;
+      ns.connect(bp); bp.connect(ngn); ngn.connect(g); ns.start(t);
+      nodes.push(ag, bg, ns, bp, ngn); srcs.push(ns);
+      g.gain.value = 1;
+      register(g, nodes, srcs, end);
+    },
+    // 弦乐：三把略微失谐的锯齿波 + 低通 + 揉弦，慢起慢收
+    pad(t, freq, pan, uw, vol) {
+      const nodes = [], srcs = [], g = out(pan, uw, nodes), end = t + 2.8;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = Math.min(2400, freq * 5); lp.Q.value = 0.7;
+      const lfo = osc('sine', 5.2, t, end, nodes, srcs), lg = ctx.createGain(); lg.gain.value = 7;
+      lfo.connect(lg); nodes.push(lg, lp);
+      for (const dt of [-7, 0, 7]) {
+        const o = osc('sawtooth', freq, t, end, nodes, srcs);
+        o.detune.value = dt; lg.connect(o.detune); o.connect(lp);
+      }
+      lp.connect(g);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol * 0.55, t + 0.35);
+      g.gain.setValueAtTime(vol * 0.55, t + 1.0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 2.7);
+      register(g, nodes, srcs, end);
+    },
+  };
+
+  function splash(t, pan, vol) {
+    const len = ctx.sampleRate * 0.35, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const nodes = [], g = out(pan, false, nodes);
+    const s = ctx.createBufferSource(); s.buffer = buf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 0.8;
+    g.gain.value = vol;
+    s.connect(bp); bp.connect(g); nodes.push(s, bp);
+    s.start(t);
+    register(g, nodes, [s], t + 0.4);
+  }
+  // 五声音阶，最高限制在第 12 级（约 1kHz）
+  function noteFreq(step) {
+    step = Math.max(0, Math.min(12, step));
+    const oct = Math.floor(step / 5), deg = step % 5;
+    return 196 * Math.pow(2, oct + PENTA[deg] / 12);
+  }
+  const ok = () => ctx && !muted;
+  const now = () => ctx.currentTime + 0.02;
+
+  return {
+    init,
+    toggle() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.6; return !muted; },
+    place(v, world) {
+      if (!ok()) return;
+      const t = now(), uw = world.y < WATER_Y - 0.3, pan = panOf(world);
+      bubble(t, pan, uw);
+      if (Math.random() < 0.5) bubble(t + 0.06 + Math.random() * 0.08, pan, uw, 400, 900, 0.1);
+      tone(t + 0.02, noteFreq(noteStep(v)), pan, uw, 0.22, 1.8, v.inst || 'tone');
+      const near = Math.exp(-Math.abs(world.y - WATER_Y) * 0.6);
+      if (near > 0.2) splash(t, pan, 0.16 * near);
+    },
+    // 回响 / 水波经过时的发声；拱门所在列带回声
+    play(notes, echo = false) {
+      if (!ok() || !notes.length) return;
+      const t = now(), vol = 0.16 / Math.sqrt(notes.length), reps = echo ? 3 : 1;
+      for (let r = 0; r < reps; r++) {
+        const pan0 = echo && r > 0 ? (r % 2 ? 0.5 : -0.5) : 0;
+        notes.forEach((n, i) => tone(t + r * 0.23 + i * 0.015, noteFreq(n.step), n.pan + pan0, n.uw || r > 1, vol * (n.vol ?? 1) * Math.pow(0.45, r), 1.3, n.inst));
+      }
+    },
+    bell(step, pan) {
+      if (!ok()) return;
+      const t = now(), f = noteFreq(step) / 2;
+      for (const [mul, amp, dec] of [[1, 1, 5], [2, 0.45, 3.5], [2.76, 0.3, 2.5], [4.07, 0.12, 1.4]]) {
+        const nodes = [], g = out(pan, false, nodes), o = ctx.createOscillator();
+        o.type = 'sine'; o.frequency.value = f * mul;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.26 * amp, t + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+        o.connect(g); nodes.push(o);
+        o.start(t); o.stop(t + dec + 0.1);
+        register(g, nodes, [o], t + dec + 0.1);
+      }
+    },
+    spring(pan) {
+      if (!ok()) return;
+      const t = now();
+      for (let i = 0; i < 6; i++) bubble(t + i * 0.07, pan, false, 260 + i * 70, 600 + i * 120, 0.14);
+      tone(t + 0.45, noteFreq(11), pan, false, 0.12, 2.4);
+      tone(t + 0.45, noteFreq(9), pan, false, 0.09, 2.4);
+    },
+    chime(pan) {
+      if (!ok()) return;
+      const t = now();
+      for (let r = 0; r < 5; r++) {
+        const v = 0.15 * Math.pow(0.5, r), p = pan + (r > 0 ? (r % 2 ? 0.4 : -0.4) : 0);
+        tone(t + r * 0.25, noteFreq(8), p, r > 2, v, 1.2);
+        tone(t + r * 0.25 + 0.12, noteFreq(10), p, r > 2, v, 1.2);
+      }
+    },
+    arp(n, pan) { if (!ok()) return; const t = now(); for (let i = 0; i < n; i++) tone(t + i * 0.07, noteFreq(3 + i), pan + (i / n - 0.5) * 0.6, false, 0.1, 0.9, 'marimba'); },
+    chord(pan) { if (!ok()) return; const t = now(); [0, 2, 4, 5].forEach((st, i) => tone(t + i * 0.09, noteFreq(st), pan, false, 0.12, 3.2)); },
+    scale(n, pan) { if (!ok()) return; const t = now(); for (let i = 0; i < n; i++) tone(t + i * 0.13, noteFreq(2 + i), pan, false, 0.13, 1.1, 'harp'); },
+    whale(pan) {
+      if (!ok()) return;
+      const t = now(), nodes = [], g = out(pan, true, nodes), o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(140, t);
+      o.frequency.exponentialRampToValueAtTime(210, t + 0.8);
+      o.frequency.exponentialRampToValueAtTime(95, t + 2.6);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.32, t + 0.5);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 3);
+      o.connect(g); nodes.push(o);
+      o.start(t); o.stop(t + 3.1);
+      register(g, nodes, [o], t + 3.1);
+    },
+    instNote(inst, step, pan, far = false) { if (ok()) tone(now(), noteFreq(step), pan, far, far ? 0.09 : 0.2, 1.5, inst); },
+    tap(pan) { if (!ok()) return; const t = now(); bubble(t, pan, true, 180, 90, 0.3); splash(t, pan, 0.07); },
+    tiny(pan) { if (ok()) bubble(now(), pan, false, 420 + Math.random() * 300, 800 + Math.random() * 400, 0.04); },
+    undo() { if (ok()) bubble(now(), 0, true, 520, 160, 0.25); },
+  };
+})();
+const panOf = w => ((w.x - view.x) - (w.z - view.z)) / Math.max(6, spanR * 2 + 4);
+
+// ======================= src/notes.js =======================
+// ================= 发声队列：放置回响 & 水波 =================
+const noteQueue = [];              // {at, v, vol, wave}
+const recentNotes = [];
+let lastTap = -9, waveId = 0;
+
+function queueEcho(src) {
+  const t0 = clock.elapsedTime + 0.12, seen = new Set([key(src.x, src.y, src.z)]);
+  let frontier = [src], depth = 0, count = 0;
+  while (frontier.length && depth < 3 && count < 6) {
+    depth++;
+    const next = [];
+    for (const v of frontier) for (const [dx, dy, dz] of NB) {
+      const k = key(v.x + dx, v.y + dy, v.z + dz);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const nb = grid.get(k);
+      if (nb) next.push(nb);
+    }
+    next.sort(() => Math.random() - 0.5);
+    for (const nb of next) {
+      if (count >= 6) break;
+      noteQueue.push({ at: t0 + count * ECHO_GAP, v: nb, vol: 0.55 * Math.pow(0.6, depth - 1) });
+      count++;
+    }
+    frontier = next;
+  }
+}
+
+function waterTap(wx, wz) {
+  const t0 = clock.elapsedTime;
+  if (t0 - lastTap < 0.25) return;                       // 防止连点
+  lastTap = t0;
+  for (const e of noteQueue) if (e.wave) e.vol *= 0.35;  // 新水波来了，旧水波剩下的音减弱
+  addRipple(wx, wz, 0.22);
+  sfx.tap(panOf(tmpW.set(wx, 0, wz)));
+  const id = ++waveId;
+  for (const v of voxels) {
+    toWorld(v, tmpW);
+    noteQueue.push({ at: t0 + Math.hypot(tmpW.x - wx, tmpW.z - wz) / WAVE_SPEED, v, vol: 1, wave: id });
+  }
+}
+
+function processQueue(t) {
+  while (recentNotes.length && t - recentNotes[0] > NOTE_WINDOW) recentNotes.shift();
+  if (!noteQueue.length) return;
+  const due = [];
+  for (let i = noteQueue.length - 1; i >= 0; i--) if (noteQueue[i].at <= t) { due.push(noteQueue[i]); noteQueue.splice(i, 1); }
+  if (!due.length) return;
+  const seen = new Set(), notes = [];
+  let echo = false;
+  for (const e of due) {
+    const v = e.v;
+    if (grid.get(key(v.x, v.y, v.z)) !== v) continue;          // 已被拆除
+    if (t - v.lastPlay < VOXEL_COOLDOWN || e.vol < 0.05) continue;
+    v.lastPlay = t;
+    flashes.push({ v, t0: t });
+    const st = noteStep(v), inst = v.inst || 'tone';
+    if (seen.has(st + inst) || notes.length >= 4 || recentNotes.length + notes.length >= NOTE_WINDOW_MAX) continue;
+    seen.add(st + inst);
+    toWorld(v, tmpW);
+    notes.push({ step: st, pan: panOf(tmpW), uw: tmpW.y < WATER_Y - 0.3, vol: e.vol, inst });
+    if (echoCols.has(v.x)) echo = true;
+  }
+  for (const _ of notes) recentNotes.push(t);
+  sfx.play(notes, echo);
+}
+
+// ======================= src/features.js =======================
+// ================= 特殊建筑 =================
+let features = { towers: new Map(), rings: new Map(), arches: new Map(), bridges: new Map(), platforms: new Map(), anchors: new Map(), stairs: new Map() };
+let echoCols = new Set();
+const relY = (x, y, z) => { const v = grid.get(key(x, y, z)); return v ? y - v.body.com.y : 0; };   // 相对所在物块重心的高度
+
+function columnRuns() {
+  const cols = new Map();
+  for (const v of voxels) { const k = v.x + ',' + v.z; if (!cols.has(k)) cols.set(k, []); cols.get(k).push(v.y); }
+  const runs = [];
+  for (const [k, ys] of cols) {
+    ys.sort((a, b) => a - b);
+    const [x, z] = k.split(',').map(Number);
+    let start = ys[0];
+    for (let i = 1; i <= ys.length; i++) {
+      if (i < ys.length && ys[i] === ys[i - 1] + 1) continue;
+      runs.push({ x, z, bottom: start, top: ys[i - 1], h: ys[i - 1] - start + 1 });
+      if (i < ys.length) start = ys[i];
+    }
+  }
+  return runs;
+}
+// 灯塔：竖直 5 格以上且塔顶高出水面
+function detectTowers(runs) {
+  const out = new Map();
+  for (const r of runs) if (r.h >= TOWER_MIN && relY(r.x, r.top, r.z) >= 2) {
+    const k = r.x + ',' + r.z, o = out.get(k);
+    if (!o || r.h > o.h) out.set(k, r);
+  }
+  return out;
+}
+// 深锚：水下竖直 5 格以上
+function detectAnchors(runs) {
+  const out = new Map();
+  for (const r of runs) if (r.h >= 5 && relY(r.x, r.bottom, r.z) <= -4 && relY(r.x, r.top, r.z) <= 1) out.set(r.x + ',' + r.z + ':' + r.bottom, r);
+  return out;
+}
+// 环：同层围合，洪水填充找被围住的空格
+function detectRings() {
+  const layers = new Map(), out = new Map(), D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const v of voxels) { if (!layers.has(v.y)) layers.set(v.y, []); layers.get(v.y).push(v); }
+  for (const [y, vs] of layers) {
+    if (vs.length < 8) continue;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const v of vs) { x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z); }
+    x0--; x1++; z0--; z1++;
+    const D = z1 - z0 + 1, idx = (x, z) => (x - x0) * D + (z - z0);
+    const outside = new Uint8Array((x1 - x0 + 1) * D), seen = new Uint8Array(outside.length);
+    const st = [[x0, z0]]; outside[0] = 1;
+    while (st.length) {
+      const [x, z] = st.pop();
+      for (const [dx, dz] of D4) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < x0 || nx > x1 || nz < z0 || nz > z1) continue;
+        const i = idx(nx, nz);
+        if (outside[i] || S(nx, y, nz)) continue;
+        outside[i] = 1; st.push([nx, nz]);
+      }
+    }
+    for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
+      const i = idx(x, z);
+      if (outside[i] || seen[i] || S(x, y, z)) continue;
+      const cells = [], q2 = [[x, z]]; seen[i] = 1;
+      while (q2.length) {
+        const [cx, cz] = q2.pop(); cells.push([cx, cz]);
+        for (const [dx, dz] of D4) {
+          const nx = cx + dx, nz = cz + dz, j = idx(nx, nz);
+          if (seen[j] || outside[j] || S(nx, y, nz)) continue;
+          seen[j] = 1; q2.push([nx, nz]);
+        }
+      }
+      let wall = null;
+      for (const [dx, dz] of D4) { wall = wall || grid.get(key(cells[0][0] + dx, y, cells[0][1] + dz)); }
+      const cx = cells.reduce((a, c) => a + c[0], 0) / cells.length, cz = cells.reduce((a, c) => a + c[1], 0) / cells.length;
+      out.set(`${y}:${x},${z}:${cells.length}`, { y, cells, cx, cz, wall, timer: 0, popT: Math.random() });
+    }
+  }
+  return out;
+}
+// 拱门：两根 ≥2 格的柱子 + 横梁，下方 ≥1 格宽、2 格高的洞
+function detectArches() {
+  const out = new Map();
+  for (const v of voxels) {
+    const { x, y, z } = v;
+    if (!S(x, y + 1, z) || !S(x, y - 1, z)) continue;
+    for (const [ax, az] of [[1, 0], [0, 1]]) {
+      for (let k = 1; k <= 7; k++) {
+        const cx = x + ax * k, cz = z + az * k;
+        if (!S(cx, y + 1, cz)) break;
+        if (S(cx, y, cz)) { if (k >= 2 && S(cx, y - 1, cz)) out.set(`${ax}:${x},${y},${z}:${k}`, { x, y, z, ax, az, k }); break; }
+        if (S(cx, y - 1, cz)) break;
+      }
+    }
+  }
+  return out;
+}
+// 长桥：同层直线 ≥8 格
+function detectBridges() {
+  const out = new Map();
+  for (const v of voxels) for (const [ax, az] of [[1, 0], [0, 1]]) {
+    if (S(v.x - ax, v.y, v.z - az)) continue;
+    let len = 1;
+    while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
+    if (len >= 8) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
+  }
+  return out;
+}
+// 浮台：3×3 实心且上方空
+function detectPlatforms() {
+  const out = new Map();
+  for (const v of voxels) {
+    let ok = true;
+    for (let i = 0; i < 3 && ok; i++) for (let j = 0; j < 3 && ok; j++) if (!S(v.x + i, v.y, v.z + j) || S(v.x + i, v.y + 1, v.z + j)) ok = false;
+    if (ok) out.set(key(v.x, v.y, v.z), { x: v.x, y: v.y, z: v.z });
+  }
+  return out;
+}
+// 阶梯：每级前进 1 格、升高 1 格，连续 ≥4 级
+function detectStairs() {
+  const out = new Map();
+  for (const v of voxels) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (S(v.x - ax, v.y - 1, v.z - az)) continue;
+    let n = 1;
+    while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+    if (n >= 4) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
+  }
+  return out;
+}
+
+function flashCell(x, y, z, delay = 0) { const v = grid.get(key(x, y, z)); if (v) flashes.push({ v, t0: clock.elapsedTime + delay }); }
+function worldOf(x, y, z) { const v = grid.get(key(x, y, z)); return v ? toWorld(v, tmpW) : tmpW.set(x, 0, z); }
+
+const REACT = {
+  tower(tw) {
+    worldOf(tw.x, tw.top, tw.z);
+    sfx.bell(Math.min(9, 2 + tw.h), panOf(tmpW)); addRipple(tmpW.x, tmpW.z, 0.3);
+    for (let y = tw.bottom; y <= tw.top; y++) flashCell(tw.x, y, tw.z, (tw.top - y) * 0.04);
+    return '灯塔';
+  },
+  ring(r) {
+    worldOf(Math.round(r.cx), r.y, Math.round(r.cz));
+    if (r.wall) { toWorld(r.wall, tmpW); }
+    sfx.spring(panOf(tmpW)); addRipple(tmpW.x, tmpW.z, 0.25);
+    for (let i = 0; i < 40; i++) spawnBubble(r, 0.3 + Math.random() * 1.2);
+    return '环';
+  },
+  arch(a) {
+    worldOf(a.x, a.y + 1, a.z); sfx.chime(panOf(tmpW));
+    for (let i = 0; i <= a.k; i++) flashCell(a.x + a.ax * i, a.y + 1, a.z + a.az * i, i * 0.05);
+    return '拱门';
+  },
+  bridge(b) {
+    for (let i = 0; i < b.len; i++) flashCell(b.x + b.ax * i, b.y, b.z + b.az * i, i * 0.06);
+    worldOf(b.x, b.y, b.z); sfx.arp(Math.min(9, b.len), panOf(tmpW)); addRipple(tmpW.x, tmpW.z, 0.2);
+    return '长桥';
+  },
+  platform(pl) {
+    worldOf(pl.x + 1, pl.y, pl.z + 1); sfx.chord(panOf(tmpW)); addRipple(tmpW.x, tmpW.z, 0.25);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) flashCell(pl.x + i, pl.y, pl.z + j, (i + j) * 0.05);
+    return '浮台';
+  },
+  anchor(an) {
+    worldOf(an.x, an.bottom, an.z); sfx.whale(panOf(tmpW)); addRipple(tmpW.x, tmpW.z, 0.15);
+    for (let y = an.top; y >= an.bottom; y--) flashCell(an.x, y, an.z, (an.top - y) * 0.08);
+    return '深锚';
+  },
+  stair(st) {
+    for (let i = 0; i < st.n; i++) flashCell(st.x + st.ax * i, st.y + i, st.z + st.az * i, i * 0.13);
+    worldOf(st.x, st.y, st.z); sfx.scale(Math.min(9, st.n + 2), panOf(tmpW));
+    return '阶梯';
+  },
+};
+const lastFx = {};
+function cooled(type, sec) {
+  const t = clock.elapsedTime;
+  if (lastFx[type] && t - lastFx[type] < sec) return false;
+  lastFx[type] = t; return true;
+}
+function react(type, f) {
+  toast('发现 · ' + REACT[type](f));
+  discover(type);
+}
+
+function applyColors() {
+  for (const v of voxels) v.col = null;
+  const paint = (x, y, z, c) => { const v = grid.get(key(x, y, z)); if (v) v.col = c; };
+  for (const pl of features.platforms.values()) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) paint(pl.x + i, pl.y, pl.z + j, PAL.platform);
+  for (const b of features.bridges.values()) for (let i = 0; i < b.len; i++) paint(b.x + b.ax * i, b.y, b.z + b.az * i, PAL.bridge);
+  for (const r of features.rings.values()) for (const [cx, cz] of r.cells) for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) paint(cx + dx, r.y, cz + dz, PAL.ring);
+  for (const a of features.arches.values()) {
+    for (const off of [0, a.k]) for (let dy = -1; dy <= 0; dy++) paint(a.x + a.ax * off, a.y + dy, a.z + a.az * off, PAL.archStone);
+    for (let i = 0; i <= a.k; i++) paint(a.x + a.ax * i, a.y + 1, a.z + a.az * i, PAL.archBeam);
+    const m = Math.round(a.k / 2);
+    paint(a.x + a.ax * m, a.y + 1, a.z + a.az * m, PAL.keystone);
+  }
+  for (const st of features.stairs.values()) for (let i = 0; i < st.n; i++) paint(st.x + st.ax * i, st.y + i, st.z + st.az * i, PAL.stair);
+  for (const an of features.anchors.values()) {
+    for (let y = an.bottom; y <= an.top; y++) paint(an.x, y, an.z, PAL.anchor);
+    paint(an.x, an.bottom, an.z, PAL.anchorTip);
+  }
+  for (const tw of features.towers.values()) {
+    for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
+    paint(tw.x, tw.top, tw.z, PAL.lamp);
+  }
+  for (const v of voxels) if (v.inst) v.col = INST[v.inst].col;   // 乐器方块保持自己的颜色
+}
+
+function updateFeatures(allowFx) {
+  const runs = columnRuns();
+  const F = {
+    towers: detectTowers(runs), rings: detectRings(), arches: detectArches(), bridges: detectBridges(),
+    platforms: detectPlatforms(), anchors: detectAnchors(runs), stairs: detectStairs(),
+  };
+  if (allowFx) {
+    for (const [k, tw] of F.towers) { const o = features.towers.get(k); if (!o || tw.h > o.h) react('tower', tw); }
+    for (const [k, r] of F.rings) if (!features.rings.has(k)) react('ring', r);
+    for (const [k, a] of F.arches) if (!features.arches.has(k)) react('arch', a);
+    const once = (name, type, sec) => { for (const [k, f] of F[name]) if (!features[name].has(k) && cooled(type, sec)) { react(type, f); break; } };
+    once('bridges', 'bridge', 2.5); once('platforms', 'platform', 4); once('anchors', 'anchor', 2.5); once('stairs', 'stair', 2.5);
+  }
+  for (const [k, r] of F.rings) { const o = features.rings.get(k); if (o) { r.timer = o.timer; r.popT = o.popT; } }
+  features = F;
+  applyColors();
+  for (const b of bodies) b.dirty = true;
+  echoCols = new Set();
+  for (const a of F.arches.values()) { if (a.ax) for (let i = 0; i <= a.k; i++) echoCols.add(a.x + i); else echoCols.add(a.x); }
+}
+
+// ======================= src/progress.js =======================
+// ================= 解锁：色彩进度 + 远处出现乐器组件 =================
+const discovered = new Set(), TOTAL_TYPES = 7;
+let colorful = 0;
+const BG_MONO = new THREE.Color(0x000000), BG_COLOR = new THREE.Color(0x06101f), bgNow = new THREE.Color();
+function discover(type) {
+  if (discovered.has(type)) return;
+  discovered.add(type);
+  setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
+  setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
+}
+// 在虚空中找一块空地，生成一个小小的乐器组件
+function spawnSeed(inst) {
+  if (!voxels.length) return;
+  let pos = null;
+  for (let tries = 0; tries < 30 && !pos; tries++) {
+    const ang = Math.random() * Math.PI * 2, d = spanR + 7 + Math.random() * 5;
+    const x = Math.round(viewTarget.x + Math.cos(ang) * d), z = Math.round(viewTarget.z + Math.sin(ang) * d);
+    if (voxels.every(v => Math.hypot(v.x - x, v.z - z) > 4)) pos = { x, z };
+  }
+  if (!pos) return;
+  const shape = SEED_SHAPES[(Math.random() * SEED_SHAPES.length) | 0];
+  let b = null;
+  for (const [dx, dy, dz] of shape) { const v = addVoxel(pos.x + dx, dy, pos.z + dz, inst, { silent: true, body: b }); if (v) b = v.body; }
+  if (!b) return;
+  b.group.updateMatrixWorld(true);
+  worldOf(pos.x, 0, pos.z);
+  addRipple(tmpW.x, tmpW.z, 0.28);
+  sfx.instNote(inst, 6, panOf(tmpW), true);
+  setTimeout(() => sfx.instNote(inst, 8, panOf(tmpW), true), 260);
+  toast(`远处出现了 · ${INST[inst].name}`);
+  b.spin.x += 0.3; b.heaveV -= 1;
+}
+function updateColorful(dt) {
+  colorful += (Math.min(1, discovered.size / TOTAL_TYPES * 1.25) - colorful) * (1 - Math.exp(-dt * 0.6));
+  waterMat.uniforms.uColorful.value = colorful;
+  bgNow.lerpColors(BG_MONO, BG_COLOR, colorful);
+  renderer.setClearColor(bgNow, 1);
+  scene.fog.color.copy(bgNow);
+}
+
+// ======================= src/overlays.js =======================
+// ================= 覆盖层：闪光 / 微光 / 气泡 / 灯塔光束（都跟随所在物块） =================
+function overlayMesh(geo, max, order) {
+  const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), max);
+  for (let i = 0; i < max; i++) m.setColorAt(i, new THREE.Color(0, 0, 0));
+  m.count = 0; m.frustumCulled = false; m.renderOrder = order;
+  scene.add(m);
+  return m;
+}
+const FLASH_MAX = 96, MARK_MAX = 128, BUB_MAX = 400;
+const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
+const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
+const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);
+const flashes = [], bubbles = [];
+const alive = v => grid.get(key(v.x, v.y, v.z)) === v;
+
+function spawnBubble(r, speed) {
+  if (bubbles.length >= BUB_MAX || !r.wall) return;
+  const c = r.cells[(Math.random() * r.cells.length) | 0];
+  bubbles.push({ body: r.wall.body, x: c[0] + (Math.random() - 0.5) * 0.8, y: r.y - 0.45, z: c[1] + (Math.random() - 0.5) * 0.8,
+    vy: speed || 0.6 + Math.random() * 0.8, ph: Math.random() * 6.28, t0: clock.elapsedTime, life: 2 + Math.random() * 1.5, s: 0.6 + Math.random() * 0.8 });
+}
+
+const beamGeo = new THREE.ConeGeometry(1.4, 9, 20, 1, true).translate(0, -4.5, 0).rotateZ(Math.PI / 2);
+const beamMat = new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+const beams = [];
+const col = new THREE.Color(), m4 = new THREE.Matrix4(), m5 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), pos = new THREE.Vector3();
+
+function updateOverlays(t, dt) {
+  // 闪光
+  while (flashes.length && t - flashes[0].t0 > 0.8) flashes.shift();
+  while (flashes.length > FLASH_MAX) flashes.shift();
+  let fi = 0;
+  for (const f of flashes) {
+    if (!alive(f.v)) continue;
+    const age = t - f.t0;
+    flashMesh.setMatrixAt(fi, voxelMatrix(f.v, m4));
+    flashMesh.setColorAt(fi++, col.setScalar(age < 0 ? 0 : 0.5 * Math.exp(-age * 5)));
+  }
+  flashMesh.count = fi;
+  flashMesh.instanceMatrix.needsUpdate = true; flashMesh.instanceColor.needsUpdate = true;
+
+  // 塔顶与拱梁的微光
+  let mi = 0;
+  const pulse = 0.09 + 0.05 * Math.sin(t * 2.2);
+  for (const tw of features.towers.values()) {
+    const v = grid.get(key(tw.x, tw.top, tw.z));
+    if (!v || mi >= MARK_MAX) continue;
+    markMesh.setMatrixAt(mi, voxelMatrix(v, m4));
+    markMesh.setColorAt(mi++, col.setRGB(pulse * 2.2, pulse * 1.7, pulse * 0.5));
+  }
+  for (const a of features.arches.values()) for (let i = 1; i < a.k && mi < MARK_MAX; i++) {
+    const v = grid.get(key(a.x + a.ax * i, a.y + 1, a.z + a.az * i));
+    if (!v) continue;
+    markMesh.setMatrixAt(mi, voxelMatrix(v, m4));
+    markMesh.setColorAt(mi++, col.setScalar(pulse * 0.8));
+  }
+  markMesh.count = mi;
+  markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
+
+  // 泉：持续冒泡 + 零星气泡声
+  for (const r of features.rings.values()) {
+    r.timer += dt;
+    const interval = 0.35 / Math.sqrt(r.cells.length);
+    while (r.timer > interval) { r.timer -= interval; spawnBubble(r); }
+    r.popT -= dt;
+    if (r.popT <= 0 && r.wall) { r.popT = 0.6 + Math.random() * 1.4; sfx.tiny(panOf(toWorld(r.wall, tmpW))); }
+  }
+  for (let i = bubbles.length - 1; i >= 0; i--) if (t - bubbles[i].t0 > bubbles[i].life || !bodies.has(bubbles[i].body)) bubbles.splice(i, 1);
+  bubbles.forEach((b, i) => {
+    const age = t - b.t0, k = Math.max(0, Math.min(1, age * 4) * (1 - age / b.life) * 0.7);
+    b.y += b.vy * dt;
+    pos.set(b.x + Math.sin(age * 5 + b.ph) * 0.06, b.y, b.z + Math.cos(age * 4 + b.ph) * 0.06);
+    bubMesh.setMatrixAt(i, m4.multiplyMatrices(b.body.content.matrixWorld, m5.compose(pos, q, sc.setScalar(b.s))));
+    bubMesh.setColorAt(i, col.setRGB(k * 0.6, k * 0.9, k));
+  });
+  bubMesh.count = bubbles.length;
+  bubMesh.instanceMatrix.needsUpdate = true; bubMesh.instanceColor.needsUpdate = true;
+
+  // 灯塔光束
+  const list = [...features.towers.values()];
+  while (beams.length < list.length) {
+    const m = new THREE.Mesh(beamGeo, beamMat);
+    m.matrixAutoUpdate = false; m.renderOrder = 18; m.frustumCulled = false;
+    scene.add(m); beams.push(m);
+  }
+  beams.forEach((m, i) => {
+    const tw = list[i], v = tw && grid.get(key(tw.x, tw.top, tw.z));
+    m.visible = !!v;
+    if (!v) return;
+    m5.makeRotationY(t * 0.9 + i * 1.7).multiply(m4.makeRotationZ(-0.08));
+    m.matrix.multiplyMatrices(voxelMatrix(v, m4, 0.1), m5);
+  });
+}
+
+// ======================= src/input.js =======================
+// ================= 放置预览 & 拾取 =================
+const ghost = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false }));
+const ghostEdges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
+  new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+ghost.add(ghostEdges);
+ghost.matrixAutoUpdate = false; ghost.renderOrder = 20; ghost.visible = false;
+scene.add(ghost);
+
+const raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2(), invM = new THREE.Matrix4();
+const pointer = { x: 0, y: 0, has: false };
+let lastPickDist = 0;
+const waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -WATER_Y);
+
+function setRay(px, py) { ndc.set(px / innerWidth * 2 - 1, -(py / innerHeight) * 2 + 1); raycaster.setFromCamera(ndc, camera); }
+function rayHit(px, py) {
+  setRay(px, py);
+  const meshes = [];
+  for (const b of bodies) meshes.push(b.mesh, b.grow);
+  const hit = raycaster.intersectObjects(meshes, false)[0];
+  if (!hit || !hit.face) return null;
+  const b = hit.object.userData.body;
+  invM.copy(b.content.matrixWorld).invert();
+  const p = hit.point.clone().applyMatrix4(invM), n = hit.face.normal;
+  const v = grid.get(key(Math.round(p.x - n.x * 0.5), Math.round(p.y - n.y * 0.5), Math.round(p.z - n.z * 0.5)));
+  return v ? { v, n } : null;
+}
+// 返回要放置的格子，以及它贴着的那个方块（用来继承音色）
+function pickCell(px, py) {
+  lastPickDist = 0;
+  if (!voxels.length) return { x: 0, y: 0, z: 0, from: null };
+  const h = rayHit(px, py);
+  if (h) {
+    const c = { x: h.v.x + Math.round(h.n.x), y: h.v.y + Math.round(h.n.y), z: h.v.z + Math.round(h.n.z), from: h.v };
+    if (!S(c.x, c.y, c.z)) return c;
+  }
+  let best = null, bestD = Infinity;
+  const p = new THREE.Vector3();
+  for (const b of bodies) {
+    invM.copy(b.content.matrixWorld).invert();
+    const ray = raycaster.ray.clone().applyMatrix4(invM);
+    for (const v of b.voxels) for (const [dx, dy, dz] of NB) {
+      const x = v.x + dx, y = v.y + dy, z = v.z + dz;
+      if (S(x, y, z)) continue;
+      p.set(x, y, z);
+      const d = ray.distanceSqToPoint(p) + p.clone().sub(ray.origin).dot(ray.direction) * 0.0004;
+      if (d < bestD) { bestD = d; best = { x, y, z, from: v }; }
+    }
+  }
+  lastPickDist = Math.sqrt(Math.max(0, bestD));
+  return best;
+}
+function waterPoint(px, py) { setRay(px, py); return raycaster.ray.intersectPlane(waterPlane, new THREE.Vector3()); }
+
+// ================= 输入 =================
+let zoom = 1;
+const pointers = new Map();
+let down = null, pinchStart = 0, pinchZoom = 1;
+const canvas = renderer.domElement;
+
+canvas.addEventListener('pointerdown', e => {
+  sfx.init();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) down = { x: e.clientX, y: e.clientY, t: performance.now(), multi: false, button: e.button };
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchStart = Math.hypot(a.x - b.x, a.y - b.y); pinchZoom = zoom;
+    if (down) down.multi = true;
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  pointer.x = e.clientX; pointer.y = e.clientY; pointer.has = e.pointerType === 'mouse';
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2 && pinchStart > 0) {
+    const [a, b] = [...pointers.values()];
+    zoom = THREE.MathUtils.clamp(pinchZoom * pinchStart / Math.hypot(a.x - b.x, a.y - b.y), ZMIN, ZMAX);
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  const click = pointers.size === 0 && down && !down.multi && e.type === 'pointerup'
+    && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
+  if (click && down.button === 2) {
+    const h = rayHit(e.clientX, e.clientY);
+    if (h) removeVoxel(h.v);
+  } else if (click) {
+    const c = pickCell(e.clientX, e.clientY);
+    if (c && lastPickDist < TAP_FAR) addVoxel(c.x, c.y, c.z, c.from ? c.from.inst : null);
+    else if (voxels.length) { const wp = waterPoint(e.clientX, e.clientY); if (wp) waterTap(wp.x, wp.z); }
+    hintEl.style.opacity = 0;
+  }
+  if (pointers.size === 0) down = null;
+  if (pointers.size < 2) pinchStart = 0;
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('pointerleave', () => { pointer.has = false; });
+canvas.addEventListener('wheel', e => { e.preventDefault(); zoom = THREE.MathUtils.clamp(zoom * Math.exp(e.deltaY * 0.0012), ZMIN, ZMAX); }, { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  sfx.init();
+  if (e.key === 'z' || e.key === 'Z') removeLast();
+  if (e.key === 'r' || e.key === 'R') resetAll();
+  if (e.key === ' ' && voxels.length) {
+    e.preventDefault();
+    const d = new THREE.Vector3(VIEW_DIR.x, 0, VIEW_DIR.z).normalize().multiplyScalar(spanR + 2.5);
+    waterTap(view.x + d.x, view.z + d.z);
+  }
+  if (e.key === 'm' || e.key === 'M') sndEl.textContent = sfx.toggle() ? '声音开' : '声音关';
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ======================= src/main.js =======================
+// ================= 主循环 =================
+const euler = new THREE.Euler();
+let camDist = 8;
+
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  U.uTime.value = t;
+  const n = voxels.length;
+
+  // 每个物块：浮力扶正 + 水的阻尼 + 暗流；重心平滑跟随
+  for (const b of bodies) {
+    const mass = 1 + b.voxels.size * 0.05, cur = 0.05 / Math.sqrt(mass), { tilt, spin } = b;
+    spin.x += (-1.6 * tilt.x - 1.4 * spin.x + cur * Math.sin(t * 0.31 + b.ph)) * dt;
+    spin.z += (-1.6 * tilt.z - 1.4 * spin.z + cur * Math.sin(t * 0.23 + 1.7 + b.ph)) * dt;
+    spin.y += (-0.25 * tilt.y - 1.4 * spin.y + cur * 0.8 * Math.sin(t * 0.13 + 0.5 + b.ph)) * dt;
+    tilt.addScaledVector(spin, dt);
+    tilt.x = THREE.MathUtils.clamp(tilt.x, -0.6, 0.6); tilt.z = THREE.MathUtils.clamp(tilt.z, -0.6, 0.6);
+    b.heaveV += (-2.0 * b.heave - 1.6 * b.heaveV) * dt;
+    b.heave += b.heaveV * dt;
+    b.smooth.lerp(b.com, 1 - Math.exp(-dt * 2));
+    b.group.position.set(b.smooth.x, b.heave + Math.sin(t * 0.5 + b.ph) * 0.22, b.smooth.z);
+    b.group.quaternion.setFromEuler(euler.set(tilt.x, tilt.y, tilt.z));
+    b.content.position.copy(b.smooth).negate();
+
+    // 新方块：弹出 + 沉入，落定后并入网格
+    let gi = 0;
+    for (const v of b.voxels) {
+      if (v.merged) continue;
+      v.sv += ((1 - v.s) * 140 - v.sv * 11) * dt;
+      v.s += v.sv * dt;
+      const age = t - v.born;
+      if (age > 0.6) { v.merged = true; b.dirty = true; continue; }
+      if (gi >= GROW_MAX) continue;
+      pos.set(v.x, v.y + Math.exp(-age * 6) * 0.5, v.z);
+      b.grow.setColorAt(gi, v.col || (v.inst ? INST[v.inst].col : WHITE));
+      b.grow.setMatrixAt(gi++, m4.compose(pos, q, sc.setScalar(Math.max(v.s, 0.0001))));
+    }
+    b.grow.count = gi;
+    b.grow.instanceMatrix.needsUpdate = true;
+    if (b.grow.instanceColor) b.grow.instanceColor.needsUpdate = true;
+    if (b.dirty) rebuildBody(b);
+  }
+
+  // 相机：方向固定，跟随所有物块的中心，距离随范围变大
+  view.lerp(viewTarget, 1 - Math.exp(-dt * 1.5));
+  const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
+  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
+  camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
+  camera.lookAt(view);
+  scene.fog.near = camDist * 0.8; scene.fog.far = camDist * 2.6;
+  waterMat.uniforms.uFade.value = Math.min(camDist * 1.8, WATER_SIZE / 2 - 4);
+  waterMat.uniforms.uCenter.value.set(view.x, view.z);
+
+  scene.updateMatrixWorld();
+  processQueue(t);
+  updateOverlays(t, dt);
+  updateColorful(dt);
+
+  // 悬停预览
+  let target = null;
+  if (!n) target = { x: 0, y: 0, z: 0, from: null };
+  else if (pointer.has && pointers.size === 0) target = pickCell(pointer.x, pointer.y);
+  if (target && n && lastPickDist >= TAP_FAR) target = null;
+  if (target) {
+    if (target.from) { ghost.matrix.multiplyMatrices(target.from.body.content.matrixWorld, tmpT.makeTranslation(target.x, target.y, target.z)); }
+    else ghost.matrix.makeTranslation(0, 0, 0);
+    const pulse = 0.5 + 0.5 * Math.sin(t * 3), ic = target.from && target.from.inst ? INST[target.from.inst].col : WHITE;
+    ghost.material.color.copy(ic); ghostEdges.material.color.copy(ic);
+    ghost.material.opacity = 0.06 + pulse * 0.08;
+    ghostEdges.material.opacity = 0.3 + pulse * 0.35;
+    ghost.visible = true;
+  } else ghost.visible = false;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
