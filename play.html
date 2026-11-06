@@ -118,6 +118,7 @@ const U = {
   // 雾：按到“最近方块”的水平距离计算（贴着结构轮廓，不受镜头缩放影响），水面和方块共用
   uFogTex: { value: null }, uFogO: { value: new THREE.Vector2() }, uFogS: { value: new THREE.Vector2(1, 1) },
   uFogNear: { value: 0.8 }, uFogFar: { value: 5.5 },
+  uFogPush: { value: 0 },          // 结局：雾被推远的距离（格）
   uFogCol: { value: new THREE.Color(0, 0, 0) },
   uProg: { value: 0 },
   uFinale: { value: 0 },           // 结局的高潮：月光、星光、方块一起亮起，之后停在一个略亮的“苏醒”状态
@@ -172,14 +173,19 @@ float ripples(vec2 p) {
   return h;
 }
 float waterH(vec2 p) { return waveBase(p) + ripples(p); }
-// 雾：距离图里存的是每格到最近方块的距离（×10），再叠两层缓慢流动的噪声 → 不规则、会呼吸的雾边
+// 雾：距离图里存的是每格到最近方块的距离（×5），再叠两层缓慢流动的噪声 → 不规则、会呼吸的雾边
 uniform sampler2D uFogTex;
 uniform vec2 uFogO, uFogS;
-uniform float uFogNear, uFogFar;
+uniform float uFogNear, uFogFar, uFogPush;
 float fogAmt(vec2 p) {
-  float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 25.5;
-  d += vnoise(p * 0.32 + vec2(uTime * 0.05, -uTime * 0.03)) * 1.5 + vnoise(p * 0.85 - uTime * 0.07) * 0.5;
-  return smoothstep(uFogNear, uFogFar, d);
+  float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 51.0;   // 存的是距离 ×5，最远 51 格
+  // 域扭曲：先用一层慢噪声把采样位置“吹歪”，雾絮就会卷动、流动
+  float t = uTime;
+  vec2 q = p + vec2(vnoise(p * 0.18 + vec2(t * 0.11, 0.0)), vnoise(p * 0.18 + vec2(7.1, -t * 0.09))) * 3.0;
+  d += vnoise(q * 0.30 + vec2(t * 0.16, -t * 0.10)) * 2.4
+     + vnoise(q * 0.80 - vec2(t * 0.24, t * 0.18)) * 1.0
+     + vnoise(q * 1.90 + vec2(-t * 0.40, t * 0.33)) * 0.4;
+  return smoothstep(uFogNear + uFogPush, uFogFar + uFogPush * 1.3, d);
 }
 float caustic(vec2 p) {
   float t = uTime * 0.8;
@@ -291,7 +297,7 @@ scene.add(water);
 
 // —— 雾的距离图：俯视每一格到最近方块的距离 ——
 // pts：方块的 (x, z) 列表；结构变化时调用
-const FOG_PAD = 12;
+const FOG_PAD = 48;               // 距离图向外多算的格数（结局时雾会被推到 ~45 格外）
 let fogData = null;
 function updateFogField(pts) {
   if (!pts.length) pts = [[0, 0]];
@@ -315,7 +321,7 @@ function updateFogField(pts) {
     d[k] = v;
   }
   const bytes = new Uint8Array(W * H);
-  for (let k = 0; k < bytes.length; k++) bytes[k] = Math.min(255, Math.round(d[k] * 10));
+  for (let k = 0; k < bytes.length; k++) bytes[k] = Math.min(255, Math.round(d[k] * 5));
   const old = U.uFogTex.value;
   const tex = new THREE.DataTexture(bytes, W, H, THREE.RedFormat, THREE.UnsignedByteType);
   tex.magFilter = tex.minFilter = THREE.LinearFilter;
@@ -1327,6 +1333,8 @@ function spawnSeed(inst) {
 function updateColorful(dt) {
   waterMat.uniforms.uColorful.value = colorful;
   U.uFinale.value = finaleLevel(U.uTime.value);
+  // 结局：雾跟着光环被推远（略慢于光环），推开后保持晴朗
+  if (finaleT >= 0) { const a = Math.max(0, U.uTime.value - finaleT); U.uFogPush.value = 30 * (1 - Math.exp(-a * 5 * 0.8 / 30)); }
   // 天空与雾：等冲击波扫到镜头附近时跟着变色
   const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
   const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);

@@ -96,6 +96,8 @@ function spawnSeed(inst) {
 function updateColorful(dt) {
   waterMat.uniforms.uColorful.value = colorful;
   U.uFinale.value = finaleLevel(U.uTime.value);
+  // 结局：雾跟着光环被推远（略慢于光环），推开后保持晴朗
+  if (finaleT >= 0) { const a = Math.max(0, U.uTime.value - finaleT); U.uFogPush.value = 30 * (1 - Math.exp(-a * 5 * 0.8 / 30)); }
   // 天空与雾：等冲击波扫到镜头附近时跟着变色
   const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
   const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
