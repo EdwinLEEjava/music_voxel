@@ -50,7 +50,7 @@ voxel-water/
 |---|---|---|
 | 回响节奏、水波速度、发声限流 | `config.js` | `ECHO_GAP` `WAVE_SPEED` `VOXEL_COOLDOWN` `NOTE_WINDOW*` |
 | 建筑门槛、成长奖励的方块数 | `config.js` | `TOWER_MIN` `NEED` `MILESTONES` |
-| 哪些建筑可以共用方块 | `features.js` | `COMPAT` |
+| 建筑归属（独占、新建筑替换旧建筑） | `features.js` | `updateFeatures` |
 | 点多远算“敲水” | `config.js` | `TAP_FAR` |
 | 建筑颜色 | `config.js` | `PAL` |
 | 乐器颜色、名字、建筑对应哪件乐器 | `config.js` | `INST` `TYPE_INST` |
