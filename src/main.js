@@ -9,6 +9,7 @@ import './codex.js';
 import './menu.js';
 import './title.js';
 import { updateCompanion } from './companion.js';
+import { updateLevel } from './level.js';
 import { updateColorful } from './progress.js';
 import { m4, pos, q, sc, updateOverlays } from './overlays.js';
 import { ghost, ghostEdges, lastPickDist, pan, pickCell, pointer, pointers, updatePan, zoom } from './input.js';
@@ -27,6 +28,7 @@ function frame() {
   // 每个物块：浮力扶正 + 水的阻尼 + 暗流；重心平滑跟随
   for (const b of bodies) {
     const mass = 1 + b.voxels.size * 0.05, cur = 0.05 / Math.sqrt(mass), { tilt, spin } = b;
+    if (b.anchored) { tilt.set(0, 0, 0); spin.set(0, 0, 0); }   // 固定的岛：不倾斜，只轻轻浮动
     spin.x += (-1.6 * tilt.x - 1.4 * spin.x + cur * Math.sin(t * 0.31 + b.ph)) * dt;
     spin.z += (-1.6 * tilt.z - 1.4 * spin.z + cur * Math.sin(t * 0.23 + 1.7 + b.ph)) * dt;
     spin.y += (-0.25 * tilt.y - 1.4 * spin.y + cur * 0.8 * Math.sin(t * 0.13 + 0.5 + b.ph)) * dt;
@@ -35,7 +37,7 @@ function frame() {
     b.heaveV += (-2.0 * b.heave - 1.6 * b.heaveV) * dt;
     b.heave += b.heaveV * dt;
     b.smooth.lerp(b.com, 1 - Math.exp(-dt * 2));
-    b.group.position.set(b.smooth.x, b.heave + Math.sin(t * 0.5 + b.ph) * 0.22, b.smooth.z);
+    b.group.position.set(b.smooth.x, b.heave + Math.sin(t * 0.5 + b.ph) * (b.anchored ? 0.04 : 0.22), b.smooth.z);
     b.group.quaternion.setFromEuler(euler.set(tilt.x, tilt.y, tilt.z));
     b.content.position.copy(b.smooth).negate();
 
@@ -71,6 +73,7 @@ function frame() {
   processQueue(t);
   updateOverlays(t, dt);
   updateCompanion(t, dt);
+  updateLevel(t, dt);
   updateColorful(dt);
 
   // 悬停预览

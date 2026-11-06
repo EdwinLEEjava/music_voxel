@@ -25,7 +25,7 @@ function stuckFor(t) {
 }
 
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
-function discover(type, x = viewTarget.x, z = viewTarget.z) {
+function discover(type, x = viewTarget.x, z = viewTarget.z, opts = {}) {
   if (discovered.has(type)) return;
   colPrev = colorful;
   discovered.add(type);
@@ -39,8 +39,9 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
   u.uBloomAmp.value = 1;
   addRipple(x, z, 0.35);
-  setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
-  if (discovered.size < TOTAL_TYPES) setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
+  if (opts.seed !== false) setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
+  if (opts.toast === false) {}
+  else if (discovered.size < TOTAL_TYPES) setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
   else setTimeout(finale, 2800);
 }
 // ———— 结局：七种建筑全部发现 ————
@@ -129,4 +130,5 @@ function updateColorful(dt) {
   U.uFogCol.value.copy(bgNow);
 }
 
-export { stuckFor, growthReward, discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };
+function markProgress() { lastProgressT = clock.elapsedTime; }
+export { markProgress, stuckFor, growthReward, discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };

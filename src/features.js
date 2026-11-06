@@ -228,7 +228,7 @@ function react(type, f) {
 }
 
 function applyColors() {
-  for (const v of voxels) v.col = null;
+  for (const v of voxels) v.col = v.baseCol || null;
   const paint = (x, y, z, c) => { const v = grid.get(key(x, y, z)); if (v) v.col = c; };
   for (const pl of features.platforms.values()) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) paint(pl.x + i, pl.y, pl.z + j, PAL.platform);
   for (const b of features.bridges.values()) for (let i = 0; i < b.len; i++) paint(b.x + b.ax * i, b.y, b.z + b.az * i, PAL.bridge);
@@ -293,7 +293,20 @@ function cellsOf(type, d) {
 }
 
 // placed：刚放下的方块的格子 key（拆除、重置时为 null）
+// 关卡模式：不再按形状识别建筑，只显示关卡给出的灯塔与提示
+let shapeMode = false, levelTowers = [], levelHints = [];
+function setLevelState(towers, hintList) { levelTowers = towers; levelHints = hintList; updateFeatures(false); }
 function updateFeatures(allowFx, placed = null) {
+  if (!shapeMode) {
+    instances.clear();
+    const F = {};
+    for (const t of PRIORITY) F[PLURAL[t]] = new Map();
+    levelTowers.forEach((tw, i) => F.towers.set('level' + i, tw));
+    features = F; hints = levelHints; echoCols = new Set();
+    applyColors();
+    for (const b of bodies) b.dirty = true;
+    return;
+  }
   const runs = columnRuns();
   const C = { tower: detectTowers(runs), anchor: detectAnchors(runs), ring: detectRings(), arch: detectArches(),
     bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
@@ -352,4 +365,4 @@ function updateFeatures(allowFx, placed = null) {
 
 function resetFeatures() { instances.clear(); }
 
-export { hints, instances, cellsOf, resetFeatures, PRIORITY, features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };
+export { setLevelState, hints, instances, cellsOf, resetFeatures, PRIORITY, features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };

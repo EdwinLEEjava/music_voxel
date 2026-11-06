@@ -187,7 +187,7 @@ function toast(text) {
 const hintEl = document.getElementById('hint'), countEl = document.getElementById('count');
 // 界面是否打开（图鉴 / 设置）：打开时不响应游戏按键
 const uiState = { title: true, codex: false, settings: false, get open() { return this.title || this.codex || this.settings; } };
-function updateHud() { countEl.textContent = voxels.length; }
+function updateHud() { countEl.textContent = voxels.filter(v => !v.relic).length; }   // 只数玩家自己放的方块
 
 // ======================= src/water.js =======================
 // ================= 水：共享的波浪函数（水面与方块共用，保证水线一致） =================
@@ -198,6 +198,8 @@ const U = {
   uFogTex: { value: null }, uFogO: { value: new THREE.Vector2() }, uFogS: { value: new THREE.Vector2(1, 1) },
   uFogNear: { value: 0.8 }, uFogFar: { value: 5.5 },
   uFogPush: { value: 0 },          // 结局：雾被推远的距离（格）
+  // 灯塔的光：每座点亮的灯塔在雾里撑开一个圆（x, z, 半径, 未用），最多 4 座
+  uLights: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, -99, 0)) },
   uFogCol: { value: new THREE.Color(0, 0, 0) },
   uProg: { value: 0 },
   uFinale: { value: 0 },           // 结局的高潮：月光、星光、方块一起亮起，之后停在一个略亮的“苏醒”状态
@@ -256,8 +258,10 @@ float waterH(vec2 p) { return waveBase(p) + ripples(p); }
 uniform sampler2D uFogTex;
 uniform vec2 uFogO, uFogS;
 uniform float uFogNear, uFogFar, uFogPush;
+uniform vec4 uLights[4];
 float fogAmt(vec2 p) {
   float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 51.0;   // 存的是距离 ×5，最远 51 格
+  for (int i = 0; i < 4; i++) d = min(d, length(p - uLights[i].xy) - uLights[i].z);   // 灯塔驱散黑暗
   // 域扭曲：先用一层慢噪声把采样位置“吹歪”，雾絮就会卷动、流动
   float t = uTime;
   vec2 q = p + vec2(vnoise(p * 0.18 + vec2(t * 0.11, 0.0)), vnoise(p * 0.18 + vec2(7.1, -t * 0.09))) * 3.0;
@@ -530,6 +534,7 @@ function rebuildBody(b) {
 }
 
 function mergeInto(b, o) {
+  if (o.anchored) b.anchored = true;
   for (const v of o.voxels) { v.body = b; b.voxels.add(v); }
   destroyBody(o);
   updateCom(b); b.dirty = true;
@@ -565,6 +570,7 @@ function splitBody(b) {
 
 function impulse(b, v) {
   const n = b.voxels.size, k = 0.55 / (1 + n * 0.12);
+  if (b.anchored) { b.heaveV -= 0.15 / (1 + n * 0.08); return; }   // 固定的岛：只轻轻一沉
   b.spin.x += (v.z - b.com.z) * k;
   b.spin.z += -(v.x - b.com.x) * k;
   b.spin.y += (Math.random() - 0.5) * k * 0.6;
@@ -579,10 +585,13 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
   for (const [dx, dy, dz] of NB) { const n = grid.get(key(x + dx, y + dy, z + dz)); if (n) touching.add(n.body); }
   let b;
   if (touching.size) {
-    b = [...touching].sort((a, c) => c.voxels.size - a.voxels.size)[0];
+    b = [...touching].sort((a, c) => (c.anchored ? 1e6 : 0) + c.voxels.size - (a.anchored ? 1e6 : 0) - a.voxels.size)[0];   // 优先并入固定的岛
     for (const o of touching) if (o !== b) mergeInto(b, o);     // 连接两个物块 → 合并
   } else b = opts.body || createBody();
   const v = { x, y, z, s: 0, sv: 0, born: clock.elapsedTime, merged: false, inst, col: null, body: b, lastPlay: -9 };
+  // 遗迹（关卡预置的地形）：直接出现、不可拆除、灰色；所在物块固定不摇晃。hidden：还藏在雾里，不参与雾的计算
+  if (opts.relic) { v.relic = true; v.baseCol = opts.col || null; v.col = v.baseCol; v.merged = true; v.s = 1; b.anchored = true; }
+  if (opts.hidden) v.hidden = true;
   grid.set(key(x, y, z), v); voxels.push(v); b.voxels.add(v);
   updateCom(b);
   if (b.voxels.size === 1) { b.smooth.copy(b.com); b.group.position.set(b.com.x, 0, b.com.z); b.content.position.copy(b.com).negate(); b.group.updateMatrixWorld(true); }
@@ -594,12 +603,13 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     notice(tmpW.x, tmpW.z);
   }
   updateFeatures(!opts.silent, key(x, y, z));
-  if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
+  if (!opts.silent) { queueEcho(v); growthReward(voxels.filter(v => !v.relic).length); onPlaced(v); }
   updateBounds(); updateHud();
   return v;
 }
 
 function removeVoxel(v) {
+  if (v.relic) return;                 // 遗迹不可拆除
   const i = voxels.indexOf(v);
   if (i < 0) return;
   toWorld(v, tmpW);
@@ -613,7 +623,7 @@ function removeVoxel(v) {
   sfx.undo();
   updateFeatures(false); updateBounds(); updateHud();
 }
-function removeLast() { if (voxels.length) removeVoxel(voxels[voxels.length - 1]); }
+function removeLast() { const v = voxels.findLast(v => !v.relic); if (v) removeVoxel(v); }
 
 function resetAll() {
   for (const b of [...bodies]) destroyBody(b);
@@ -628,7 +638,7 @@ function resetAll() {
 const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
 let spanR = 0;
 function updateBounds() {
-  updateFogField(voxels.map(v => [v.x, v.z]));
+  updateFogField(voxels.filter(v => !v.hidden).map(v => [v.x, v.z]));
   if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const v of voxels) {
@@ -1272,7 +1282,7 @@ function react(type, f) {
 }
 
 function applyColors() {
-  for (const v of voxels) v.col = null;
+  for (const v of voxels) v.col = v.baseCol || null;
   const paint = (x, y, z, c) => { const v = grid.get(key(x, y, z)); if (v) v.col = c; };
   for (const pl of features.platforms.values()) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) paint(pl.x + i, pl.y, pl.z + j, PAL.platform);
   for (const b of features.bridges.values()) for (let i = 0; i < b.len; i++) paint(b.x + b.ax * i, b.y, b.z + b.az * i, PAL.bridge);
@@ -1337,7 +1347,20 @@ function cellsOf(type, d) {
 }
 
 // placed：刚放下的方块的格子 key（拆除、重置时为 null）
+// 关卡模式：不再按形状识别建筑，只显示关卡给出的灯塔与提示
+let shapeMode = false, levelTowers = [], levelHints = [];
+function setLevelState(towers, hintList) { levelTowers = towers; levelHints = hintList; updateFeatures(false); }
 function updateFeatures(allowFx, placed = null) {
+  if (!shapeMode) {
+    instances.clear();
+    const F = {};
+    for (const t of PRIORITY) F[PLURAL[t]] = new Map();
+    levelTowers.forEach((tw, i) => F.towers.set('level' + i, tw));
+    features = F; hints = levelHints; echoCols = new Set();
+    applyColors();
+    for (const b of bodies) b.dirty = true;
+    return;
+  }
   const runs = columnRuns();
   const C = { tower: detectTowers(runs), anchor: detectAnchors(runs), ring: detectRings(), arch: detectArches(),
     bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
@@ -1413,7 +1436,7 @@ function stuckFor(t) {
 }
 
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
-function discover(type, x = viewTarget.x, z = viewTarget.z) {
+function discover(type, x = viewTarget.x, z = viewTarget.z, opts = {}) {
   if (discovered.has(type)) return;
   colPrev = colorful;
   discovered.add(type);
@@ -1427,8 +1450,9 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
   u.uBloomAmp.value = 1;
   addRipple(x, z, 0.35);
-  setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
-  if (discovered.size < TOTAL_TYPES) setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
+  if (opts.seed !== false) setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
+  if (opts.toast === false) {}
+  else if (discovered.size < TOTAL_TYPES) setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
   else setTimeout(finale, 2800);
 }
 // ———— 结局：七种建筑全部发现 ————
@@ -1516,6 +1540,8 @@ function updateColorful(dt) {
   renderer.setClearColor(bgNow, 1);
   U.uFogCol.value.copy(bgNow);
 }
+
+function markProgress() { lastProgressT = clock.elapsedTime; }
 
 // ======================= src/codex.js =======================
 // ================= 图鉴：按 B 打开 / 关闭 =================
@@ -1605,7 +1631,7 @@ const CONTROLS = [
   ['滚轮 / 双指', '缩放'],
   ['点击远处水面 / 空格', '敲水，让水波奏响结构'],
   ['Z', '撤销上一个方块'],
-  ['R', '清空所有方块'],
+  ['R', '重新开始本关'],
   ['C', '视野回到结构中心'],
   ['B', '图鉴'],
   ['M', '音效开 / 关'],
@@ -1990,7 +2016,7 @@ addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow')) e.preventDefault();
   if (e.key === 'c' || e.key === 'C') pan.set(0, 0, 0);
   if (e.key === 'z' || e.key === 'Z') removeLast();
-  if (e.key === 'r' || e.key === 'R') resetAll();
+  if (e.key === 'r' || e.key === 'R') restartLevel();
   if (e.key === ' ' && voxels.length) {
     e.preventDefault();
     const d = new THREE.Vector3(VIEW_DIR.x, 0, VIEW_DIR.z).normalize().multiplyScalar(spanR + 2.5);
@@ -2022,6 +2048,7 @@ function frame() {
   // 每个物块：浮力扶正 + 水的阻尼 + 暗流；重心平滑跟随
   for (const b of bodies) {
     const mass = 1 + b.voxels.size * 0.05, cur = 0.05 / Math.sqrt(mass), { tilt, spin } = b;
+    if (b.anchored) { tilt.set(0, 0, 0); spin.set(0, 0, 0); }   // 固定的岛：不倾斜，只轻轻浮动
     spin.x += (-1.6 * tilt.x - 1.4 * spin.x + cur * Math.sin(t * 0.31 + b.ph)) * dt;
     spin.z += (-1.6 * tilt.z - 1.4 * spin.z + cur * Math.sin(t * 0.23 + 1.7 + b.ph)) * dt;
     spin.y += (-0.25 * tilt.y - 1.4 * spin.y + cur * 0.8 * Math.sin(t * 0.13 + 0.5 + b.ph)) * dt;
@@ -2030,7 +2057,7 @@ function frame() {
     b.heaveV += (-2.0 * b.heave - 1.6 * b.heaveV) * dt;
     b.heave += b.heaveV * dt;
     b.smooth.lerp(b.com, 1 - Math.exp(-dt * 2));
-    b.group.position.set(b.smooth.x, b.heave + Math.sin(t * 0.5 + b.ph) * 0.22, b.smooth.z);
+    b.group.position.set(b.smooth.x, b.heave + Math.sin(t * 0.5 + b.ph) * (b.anchored ? 0.04 : 0.22), b.smooth.z);
     b.group.quaternion.setFromEuler(euler.set(tilt.x, tilt.y, tilt.z));
     b.content.position.copy(b.smooth).negate();
 
@@ -2066,6 +2093,7 @@ function frame() {
   processQueue(t);
   updateOverlays(t, dt);
   updateCompanion(t, dt);
+  updateLevel(t, dt);
   updateColorful(dt);
 
   // 悬停预览
@@ -2088,6 +2116,148 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ======================= src/level.js =======================
+// ================= 关卡 =================
+// 第一关：灯塔
+// 雾散开 → 小岛、房子、港湾、未完成的塔 → 提示在塔顶 → 补 2 格点亮灯塔
+// → 灯光驱散雾，第二座岛出现 → 独立补 3 格 → 两座灯塔都亮起，找回第一种颜色
+// 关卡只检查“塔顶上方连续叠了几格”，其他搭建只会发声，不会触发任何东西
+
+const C = h => new THREE.Color(h);
+const GREY = {                      // 遗迹的灰色：和玩家的白色方块区分开
+  rock: C(0x5c6066), ground: C(0x7d8187), house: C(0xc9cbce), roof: C(0x8e9196),
+  harbor: C(0x6e7176), tower: C(0xa9acb1),
+};
+const LIGHT_R = 19, LIGHT_SEC = 4.5;   // 灯塔点亮后，光在雾里撑开的半径（格）和用时
+
+// 一座岛：圆形的地面 + 水下的岩基
+function islandCells(cx, cz, r2Top, r2Base) {
+  const out = [];
+  const R = Math.ceil(Math.sqrt(r2Top));
+  for (let x = -R; x <= R; x++) for (let z = -R; z <= R; z++) {
+    const d = x * x + z * z;
+    if (d <= r2Base) out.push([cx + x, -1, cz + z, GREY.rock]);
+    if (d <= r2Top) out.push([cx + x, 0, cz + z, GREY.ground]);
+  }
+  return out;
+}
+const ISLANDS = [
+  { // 第一座：房子、伸出去的港湾、只差 2 格的塔
+    cells: () => [
+      ...islandCells(0, 0, 7, 4),
+      ...[[-1, 0], [0, 0], [-1, 1], [0, 1]].flatMap(([x, z]) => [[x, 1, z, GREY.house], [x, 2, z, GREY.house], [x, 3, z, GREY.roof]]),
+      [1, 0, 3, GREY.harbor], [1, 0, 4, GREY.harbor], [1, 0, 5, GREY.harbor], [1, 0, 6, GREY.harbor], [1, 1, 6, GREY.harbor],
+      [2, 1, -1, GREY.tower], [2, 2, -1, GREY.tower], [2, 3, -1, GREY.tower],
+    ],
+    tower: { x: 2, z: -1, bottom: 1, top: 3, need: 2 },
+  },
+  { // 第二座：类似的小岛，塔更矮，要独立补 3 格
+    cells: () => [
+      ...islandCells(-13, -9, 5, 2),
+      [-14, 1, -8, GREY.house], [-14, 2, -8, GREY.house], [-14, 3, -8, GREY.roof],
+      [-13, 0, -6, GREY.harbor], [-13, 0, -5, GREY.harbor],
+      [-12, 1, -10, GREY.tower], [-12, 2, -10, GREY.tower],
+    ],
+    tower: { x: -12, z: -10, bottom: 1, top: 2, need: 3 },
+  },
+];
+
+let stage = 0;                       // 0：补第一座塔  1：补第二座塔  2：本关完成
+let lit = [], lights = [], revealAt = null;
+
+function build(i, hidden) {
+  for (const [x, y, z, col] of ISLANDS[i].cells()) addVoxel(x, y, z, null, { relic: true, col, silent: true, hidden });
+}
+// 塔顶上方连续叠了几格
+function stacked(tw) { let n = 0; while (S(tw.x, tw.top + n + 1, tw.z)) n++; return n; }
+function towerData(tw) { const top = tw.top + stacked(tw); return { x: tw.x, z: tw.z, bottom: tw.bottom, top, h: top - tw.bottom + 1 }; }
+
+// 卡住时的“差一点”提示：当前那座塔顶的下一格
+function refresh() {
+  const tw = stage < 2 ? ISLANDS[stage].tower : null, hints = [];
+  if (tw) {
+    const n = stacked(tw), base = grid.get(key(tw.x, tw.top + n, tw.z));
+    if (base) hints.push({ x: tw.x, y: tw.top + n + 1, z: tw.z, body: base.body, w: 1 });
+  }
+  setLevelState(lit.map(towerData), hints);
+}
+
+function lightTower(i) {
+  const tw = ISLANDS[i].tower;
+  lit.push(tw);
+  refresh();
+  REACT.tower(towerData(tw));                 // 塔身闪亮、钟声、涟漪
+  const top = grid.get(key(tw.x, towerData(tw).top, tw.z));
+  if (top) toWorld(top, tmpW); else tmpW.set(tw.x, 0, tw.z);
+  lights.push({ i: lights.length, x: tmpW.x, z: tmpW.z, t0: clock.elapsedTime });
+  markProgress();
+}
+
+function onPlaced() {
+  if (stage >= 2) return;
+  const tw = ISLANDS[stage].tower;
+  if (stacked(tw) >= tw.need) {
+    const i = stage;
+    stage++;                         // 先进入下一阶段，提示才会指向下一座塔（或消失）
+    lightTower(i);
+    if (stage === 1) {
+      // 第二座岛藏在雾里，等灯光扫到才出现
+      build(1, true);
+      const b = ISLANDS[1].tower;
+      revealAt = Math.hypot(b.x - lights[0].x, b.z - lights[0].z) - 4;
+    } else {
+      // 本关完成：找回第一种颜色
+      const b = lights[1];
+      setTimeout(() => discover('tower', b.x, b.z, { seed: false, toast: false }), 1500);
+      setTimeout(() => toast('找回了第一种颜色'), 3500);
+    }
+    return;
+  }
+  refresh();
+}
+
+function updateLevel(t) {
+  // 灯光在雾里慢慢撑开
+  for (const L of lights) {
+    const a = Math.min(1, (t - L.t0) / LIGHT_SEC), r = LIGHT_R * (1 - Math.pow(1 - a, 3));
+    U.uLights.value[L.i].set(L.x, L.z, r, 0);
+    if (L.i === 0 && revealAt !== null && r >= revealAt) {
+      revealAt = null;
+      for (const v of voxels) v.hidden = false;
+      updateBounds();
+      const b = ISLANDS[1].tower;
+      addRipple(b.x, b.z, 0.2);
+      sfx.whoosh(3);
+      refresh();
+    }
+  }
+  // 开局的“点击鼠标左键”提示，贴在第一座塔顶上方
+  if (stage === 0 && hintEl.style.opacity !== '0') {
+    const tw = ISLANDS[0].tower, v = grid.get(key(tw.x, tw.top, tw.z));
+    if (v) {
+      const p = new THREE.Vector3(v.x, v.y + 1.6, v.z);
+      v.body.content.localToWorld(p);
+      p.project(camera);
+      hintEl.style.left = ((p.x + 1) / 2 * innerWidth) + 'px';
+      hintEl.style.top = ((1 - p.y) / 2 * innerHeight) + 'px';
+      hintEl.style.transform = 'translate(-50%, -100%)';
+    }
+  }
+}
+
+function startLevel() {
+  stage = 0; lit = []; lights = []; revealAt = null;
+  for (const l of U.uLights.value) l.set(0, 0, -99, 0);
+  build(0, false);
+  refresh();
+  updateBounds();
+}
+// R：重新开始本关（不再播开场）
+function restartLevel() {
+  resetAll();
+  startLevel();
+}
 
 // ======================= src/title.js =======================
 // ================= 开始页面 =================
@@ -2125,7 +2295,7 @@ function startGame() {
   setTimeout(finish, 8000);                       // 保险：无论如何 8 秒后解锁
   setTimeout(() => sfx.whoosh(4.2), 250);
   setTimeout(() => {
-    addVoxel(0, 0, 0);                           // 第一个白色方块
+    startLevel();                                // 第一关：地形从雾里出现
     openT = clock.elapsedTime; fogOpen();
   }, 700);
 }

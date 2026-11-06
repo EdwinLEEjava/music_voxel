@@ -11,6 +11,6 @@ function toast(text) {
 const hintEl = document.getElementById('hint'), countEl = document.getElementById('count');
 // 界面是否打开（图鉴 / 设置）：打开时不响应游戏按键
 const uiState = { title: true, codex: false, settings: false, get open() { return this.title || this.codex || this.settings; } };
-function updateHud() { countEl.textContent = voxels.length; }
+function updateHud() { countEl.textContent = voxels.filter(v => !v.relic).length; }   // 只数玩家自己放的方块
 
 export { toastEl, toastTimer, toast, hintEl, countEl, uiState, updateHud };

@@ -5,6 +5,7 @@ import { hintEl, uiState } from './ui.js';
 import { NB, S, addVoxel, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { waterTap } from './notes.js';
+import { restartLevel } from './level.js';
 import { discover, discovered } from './progress.js';
 import { toast } from './ui.js';
 
@@ -141,7 +142,7 @@ addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow')) e.preventDefault();
   if (e.key === 'c' || e.key === 'C') pan.set(0, 0, 0);
   if (e.key === 'z' || e.key === 'Z') removeLast();
-  if (e.key === 'r' || e.key === 'R') resetAll();
+  if (e.key === 'r' || e.key === 'R') restartLevel();
   if (e.key === ' ' && voxels.length) {
     e.preventDefault();
     const d = new THREE.Vector3(VIEW_DIR.x, 0, VIEW_DIR.z).normalize().multiplyScalar(spanR + 2.5);

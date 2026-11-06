@@ -9,6 +9,7 @@ import { resetFeatures, updateFeatures } from './features.js';
 import { bubbles, flashes } from './overlays.js';
 import { growthReward } from './progress.js';
 import { notice } from './companion.js';
+import { onPlaced } from './level.js';
 
 // ================= 数据 =================
 // 所有方块共用一套整数格子坐标；每个“物块”(body) 是一组相连的方块，作为独立刚体漂浮
@@ -100,6 +101,7 @@ function rebuildBody(b) {
 }
 
 function mergeInto(b, o) {
+  if (o.anchored) b.anchored = true;
   for (const v of o.voxels) { v.body = b; b.voxels.add(v); }
   destroyBody(o);
   updateCom(b); b.dirty = true;
@@ -135,6 +137,7 @@ function splitBody(b) {
 
 function impulse(b, v) {
   const n = b.voxels.size, k = 0.55 / (1 + n * 0.12);
+  if (b.anchored) { b.heaveV -= 0.15 / (1 + n * 0.08); return; }   // 固定的岛：只轻轻一沉
   b.spin.x += (v.z - b.com.z) * k;
   b.spin.z += -(v.x - b.com.x) * k;
   b.spin.y += (Math.random() - 0.5) * k * 0.6;
@@ -149,10 +152,13 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
   for (const [dx, dy, dz] of NB) { const n = grid.get(key(x + dx, y + dy, z + dz)); if (n) touching.add(n.body); }
   let b;
   if (touching.size) {
-    b = [...touching].sort((a, c) => c.voxels.size - a.voxels.size)[0];
+    b = [...touching].sort((a, c) => (c.anchored ? 1e6 : 0) + c.voxels.size - (a.anchored ? 1e6 : 0) - a.voxels.size)[0];   // 优先并入固定的岛
     for (const o of touching) if (o !== b) mergeInto(b, o);     // 连接两个物块 → 合并
   } else b = opts.body || createBody();
   const v = { x, y, z, s: 0, sv: 0, born: clock.elapsedTime, merged: false, inst, col: null, body: b, lastPlay: -9 };
+  // 遗迹（关卡预置的地形）：直接出现、不可拆除、灰色；所在物块固定不摇晃。hidden：还藏在雾里，不参与雾的计算
+  if (opts.relic) { v.relic = true; v.baseCol = opts.col || null; v.col = v.baseCol; v.merged = true; v.s = 1; b.anchored = true; }
+  if (opts.hidden) v.hidden = true;
   grid.set(key(x, y, z), v); voxels.push(v); b.voxels.add(v);
   updateCom(b);
   if (b.voxels.size === 1) { b.smooth.copy(b.com); b.group.position.set(b.com.x, 0, b.com.z); b.content.position.copy(b.com).negate(); b.group.updateMatrixWorld(true); }
@@ -164,12 +170,13 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     notice(tmpW.x, tmpW.z);
   }
   updateFeatures(!opts.silent, key(x, y, z));
-  if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
+  if (!opts.silent) { queueEcho(v); growthReward(voxels.filter(v => !v.relic).length); onPlaced(v); }
   updateBounds(); updateHud();
   return v;
 }
 
 function removeVoxel(v) {
+  if (v.relic) return;                 // 遗迹不可拆除
   const i = voxels.indexOf(v);
   if (i < 0) return;
   toWorld(v, tmpW);
@@ -183,7 +190,7 @@ function removeVoxel(v) {
   sfx.undo();
   updateFeatures(false); updateBounds(); updateHud();
 }
-function removeLast() { if (voxels.length) removeVoxel(voxels[voxels.length - 1]); }
+function removeLast() { const v = voxels.findLast(v => !v.relic); if (v) removeVoxel(v); }
 
 function resetAll() {
   for (const b of [...bodies]) destroyBody(b);
@@ -198,7 +205,7 @@ function resetAll() {
 const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
 let spanR = 0;
 function updateBounds() {
-  updateFogField(voxels.map(v => [v.x, v.z]));
+  updateFogField(voxels.filter(v => !v.hidden).map(v => [v.x, v.z]));
   if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const v of voxels) {

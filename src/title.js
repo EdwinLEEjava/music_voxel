@@ -1,7 +1,7 @@
 import { clock } from './core.js';
 import { uiState } from './ui.js';
 import { U } from './water.js';
-import { addVoxel } from './world.js';
+import { startLevel } from './level.js';
 import { sfx } from './audio.js';
 import { quitGame } from './menu.js';
 import { startIntro } from './main.js';
@@ -41,7 +41,7 @@ function startGame() {
   setTimeout(finish, 8000);                       // 保险：无论如何 8 秒后解锁
   setTimeout(() => sfx.whoosh(4.2), 250);
   setTimeout(() => {
-    addVoxel(0, 0, 0);                           // 第一个白色方块
+    startLevel();                                // 第一关：地形从雾里出现
     openT = clock.elapsedTime; fogOpen();
   }, 700);
 }
