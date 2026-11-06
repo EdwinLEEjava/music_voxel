@@ -20,7 +20,7 @@ const C = h => new THREE.Color(h);
 // 用白 / 浅灰条纹表明它是灯塔，是全场最亮的东西
 const MAT = {
   rock: C(0x3c3f44), rock2: C(0x46494e), ground: C(0x53575c),
-  house: C(0x8f9296), roof: C(0x63666b), harbor: C(0x6e7175), window: C(0xd9b47a),
+  house: C(0x8f9296), roof: C(0x63666b), harbor: C(0x6e7175),
   stripeA: C(0xf4f4f4), stripeB: C(0xc9cacc),
 };
 const LIGHT_R = 19, LIGHT_SEC = 4.5;   // 灯塔点亮后，光在雾里撑开的半径（格）和用时
@@ -44,27 +44,27 @@ const ISLANDS = [
     cells: () => [
       ...islandCells(0, 0, 8, 5, [[-1, 0], [0, 0], [-1, 1], [0, 1], [1, 2], [1, 1], [2, -1], [3, -1]]),
       [3, 0, -1, MAT.rock2], [3, 0, -2, MAT.rock], [4, 0, -2, MAT.rock], [3, -1, -2, MAT.rock], [4, -1, -2, MAT.rock],
-      ...[[-1, 0], [0, 0], [-1, 1], [0, 1]].flatMap(([x, z]) => [[x, 1, z, x === 0 && z === 1 ? MAT.window : MAT.house], [x, 2, z, MAT.house], [x, 3, z, MAT.roof]]),
+      ...[[-1, 0], [0, 0], [-1, 1], [0, 1]].flatMap(([x, z]) => [[x, 1, z, MAT.house], [x, 2, z, MAT.house], [x, 3, z, MAT.roof]]),
       [1, 0, 3, MAT.harbor], [1, 0, 4, MAT.harbor], [1, 0, 5, MAT.harbor], [1, 0, 6, MAT.harbor], [1, 1, 6, MAT.harbor],
       ...stripes(4, -2, 1, 3),
     ],
-    glows: [{ x: 4, y: 3, z: -2, kind: 'ember' }, { x: 0, y: 1, z: 1, kind: 'window' }],
+    glows: [{ x: 4, y: 3, z: -2, kind: 'ember' }],
     tower: { x: 4, z: -2, bottom: 1, top: 3, need: 2 },
   },
   { // 第二座：类似的小岛，塔更矮，要独立补 3 格
     cells: () => [
       ...islandCells(-13, -9, 5, 2, [[-14, -8], [-12, -10]]),
       [-11, 0, -11, MAT.rock], [-12, 0, -11, MAT.rock2], [-11, -1, -11, MAT.rock],
-      [-14, 1, -8, MAT.window], [-14, 2, -8, MAT.house], [-14, 3, -8, MAT.roof],
+      [-14, 1, -8, MAT.house], [-14, 2, -8, MAT.house], [-14, 3, -8, MAT.roof],
       [-13, 0, -6, MAT.harbor], [-13, 0, -5, MAT.harbor],
       ...stripes(-11, -11, 1, 2),
     ],
-    glows: [{ x: -11, y: 2, z: -11, kind: 'ember' }, { x: -14, y: 1, z: -8, kind: 'window' }],
+    glows: [{ x: -11, y: 2, z: -11, kind: 'ember' }],
     tower: { x: -11, z: -11, bottom: 1, top: 2, need: 3 },
   },
 ];
 
-// ———— 小船：困在港湾外的黑暗里，第一座灯塔点亮后慢慢驶回港湾 ————
+// ———— 小船（灰色）：困在港湾外的黑暗里，第一座灯塔点亮后慢慢驶回港湾 ————
 const boatMat = new THREE.MeshStandardMaterial({ color: 0x7b7e83, roughness: 0.7 });
 makeUnderwater(boatMat);
 const boat = new THREE.Group();
@@ -72,10 +72,7 @@ const boat = new THREE.Group();
   const hull = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 1.4), boatMat);
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.32, 0.45), boatMat); cabin.position.set(0, 0.3, 0.25);
   const mast = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.9, 0.06), boatMat); mast.position.set(0, 0.6, -0.25);
-  // 船上的小灯：不受雾影响，黑暗里也看得到一点
-  const lantern = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshBasicMaterial({ color: 0xffc77a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
-  lantern.position.set(0, 1.08, -0.25);
-  boat.add(hull, cabin, mast, lantern);
+  boat.add(hull, cabin, mast);
 }
 boat.renderOrder = 5; boat.visible = false;
 scene.add(boat);
