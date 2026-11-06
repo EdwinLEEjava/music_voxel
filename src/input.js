@@ -1,10 +1,12 @@
 import * as THREE from 'three';
-import { TAP_FAR, WATER_Y, ZMAX, ZMIN } from './config.js';
+import { TAP_FAR, TYPE_INST, WATER_Y, ZMAX, ZMIN } from './config.js';
 import { VIEW_DIR, camera, renderer, scene } from './core.js';
 import { hintEl, sndEl } from './ui.js';
 import { NB, S, addVoxel, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { waterTap } from './notes.js';
+import { discover, discovered } from './progress.js';
+import { toast } from './ui.js';
 
 // ================= 放置预览 & 拾取 =================
 const ghost = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false }));
@@ -112,6 +114,11 @@ addEventListener('keydown', e => {
     e.preventDefault();
     const d = new THREE.Vector3(VIEW_DIR.x, 0, VIEW_DIR.z).normalize().multiplyScalar(spanR + 2.5);
     waterTap(view.x + d.x, view.z + d.z);
+  }
+  // 调试：N 解锁下一种还没发现的建筑（连按 7 次可直接看到结局）
+  if (e.key === 'n' || e.key === 'N') {
+    const next = Object.keys(TYPE_INST).find(t => !discovered.has(t));
+    if (next) { toast('调试 · 解锁 ' + next); discover(next, view.x, view.z); }
   }
   if (e.key === 'm' || e.key === 'M') sndEl.textContent = sfx.toggle() ? '声音开' : '声音关';
 });

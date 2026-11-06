@@ -1547,6 +1547,11 @@ addEventListener('keydown', e => {
     const d = new THREE.Vector3(VIEW_DIR.x, 0, VIEW_DIR.z).normalize().multiplyScalar(spanR + 2.5);
     waterTap(view.x + d.x, view.z + d.z);
   }
+  // 调试：N 解锁下一种还没发现的建筑（连按 7 次可直接看到结局）
+  if (e.key === 'n' || e.key === 'N') {
+    const next = Object.keys(TYPE_INST).find(t => !discovered.has(t));
+    if (next) { toast('调试 · 解锁 ' + next); discover(next, view.x, view.z); }
+  }
   if (e.key === 'm' || e.key === 'M') sndEl.textContent = sfx.toggle() ? '声音开' : '声音关';
 });
 addEventListener('resize', () => {
