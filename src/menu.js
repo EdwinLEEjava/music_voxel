@@ -59,7 +59,9 @@ function renderSettings() {
     <div class="set-body">${TABS[tab].html()}</div></div><div class="set-foot">Esc 返回游戏</div>`;
 }
 function toggleSettings(force) {
+  const was = uiState.settings;
   uiState.settings = force ?? !uiState.settings;
+  if (was !== uiState.settings) { sfx.init(); sfx.ui(uiState.settings ? 'open' : 'close'); }
   if (uiState.settings) { tab = 'controls'; renderSettings(); toggleCodex(false); }
   panel.classList.toggle('open', uiState.settings);
 }
@@ -69,20 +71,22 @@ const quitEl = document.createElement('div');
 quitEl.id = 'quit';
 quitEl.innerHTML = '<div>已退出</div><div class="quit-sub">可以关闭这个页面 · 点击任意处回到游戏</div>';
 document.body.appendChild(quitEl);
-quitEl.addEventListener('pointerdown', () => quitEl.classList.remove('open'));
+quitEl.addEventListener('pointerdown', () => { quitEl.classList.remove('open'); sfx.ui('open'); });
 function quitGame() { window.close(); quitEl.classList.add('open'); }
 
 panel.addEventListener('click', e => {
   const t = e.target.closest('[data-tab]'), d = e.target.closest('[data-do]');
-  if (t) { tab = t.dataset.tab; renderSettings(); }
-  else if (d && d.dataset.do === 'reset') location.reload();
+  if (t) { if (tab !== t.dataset.tab) sfx.ui(); tab = t.dataset.tab; renderSettings(); }
+  else if (d && d.dataset.do === 'reset') { sfx.ui('close'); setTimeout(() => location.reload(), 350); }
   else if (d && d.dataset.do === 'quit') { toggleSettings(false); quitGame(); }
   else if (e.target === panel) toggleSettings(false);
 });
 
 function toggleSound() {
   sfx.init();
-  soundIcon.innerHTML = sfx.toggle() ? ICON.soundOn : ICON.soundOff;
+  const on = sfx.toggle();
+  soundIcon.innerHTML = on ? ICON.soundOn : ICON.soundOff;
+  if (on) sfx.ui();                     // 打开音效时轻响一下（关掉时自然没有声音）
 }
 
 bar.addEventListener('click', e => {

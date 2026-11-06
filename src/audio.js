@@ -292,6 +292,47 @@ const sfx = (() => {
     tap(pan) { if (!ok()) return; const t = now(); bubble(t, pan, true, 180, 90, 0.3); splash(t, pan, 0.07); },
     tiny(pan) { if (ok()) bubble(now(), pan, false, 420 + Math.random() * 300, 800 + Math.random() * 400, 0.04); },
     undo() { if (ok()) bubble(now(), 0, true, 520, 160, 0.25); },
+    // 开场镜头拉近：一段“呼吸”般的风声（扫频的过滤噪声）+ 两个慢慢浮起的高音，空、远、轻
+    whoosh(dur = 4) {
+      if (!ok()) return;
+      const t = now(), nodes = [], srcs = [], g = out(0, false, nodes), end = t + dur + 0.2;
+      const len = Math.floor(ctx.sampleRate * (dur + 0.2)), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const ns = ctx.createBufferSource(); ns.buffer = buf;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+      bp.frequency.setValueAtTime(260, t);
+      bp.frequency.exponentialRampToValueAtTime(1500, t + dur * 0.55);
+      bp.frequency.exponentialRampToValueAtTime(420, t + dur);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, t);
+      ng.gain.exponentialRampToValueAtTime(0.1, t + dur * 0.5);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      ns.connect(bp); bp.connect(ng); ng.connect(g); ns.start(t); ns.stop(end);
+      nodes.push(ns, bp, ng); srcs.push(ns);
+      for (const [f, v] of [[587, 0.028], [880, 0.02]]) {      // D5、A5：空灵的五度
+        const o = osc('sine', f, t, end, nodes, srcs), og = ctx.createGain();
+        o.detune.value = (Math.random() - 0.5) * 8;
+        og.gain.setValueAtTime(0.0001, t);
+        og.gain.exponentialRampToValueAtTime(v, t + dur * 0.6);
+        og.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.1);
+        o.connect(og); og.connect(g); nodes.push(og);
+      }
+      g.gain.value = 1;
+      register(g, nodes, srcs, end);
+    },
+    // 界面音效：像轻敲玻璃，音量很小、混响很长。open 上行两音、close 下行两音、tap 单音
+    ui(kind = 'tap') {
+      if (!ok()) return;
+      const t = now(), seq = kind === 'open' ? [784, 1175] : kind === 'close' ? [1175, 784] : [988];
+      seq.forEach((f, i) => {
+        const nodes = [], srcs = [], g = out(0, false, nodes), s = t + i * 0.07, end = s + 0.9;
+        const o = osc('sine', f, s, end, nodes, srcs), o2 = osc('sine', f * 2.01, s, end, nodes, srcs), g2 = ctx.createGain();
+        g2.gain.value = 0.15; o2.connect(g2); g2.connect(g); nodes.push(g2);
+        o.connect(g);
+        env(g, s, 0.045, 0.004, 0.8);
+        register(g, nodes, srcs, end);
+      });
+    },
   };
 })();
 const panOf = w => ((w.x - view.x) - (w.z - view.z)) / Math.max(6, spanR * 2 + 4);

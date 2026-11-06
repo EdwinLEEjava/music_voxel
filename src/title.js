@@ -8,7 +8,8 @@ import { startIntro } from './main.js';
 
 // ================= 开始页面 =================
 // 开始前：世界整个藏在雾里，只显示游戏名和两个文字按钮
-// 点“开始游戏”：页面淡出 → 镜头从远处拉近 → 中心出现第一个白色方块 → 雾从方块周围散开到平时的范围
+// 点“开始游戏”：页面淡出 → 镜头从远处拉近（风声）→ 中心出现第一个白色方块 → 雾从方块周围散开到平时的范围
+// 镜头完全拉近之前不能放置、不显示预览
 const GAME_NAME = '水中体素';
 const FOG_HIDDEN = -7;            // 雾推到负数：整片海都藏在雾里
 const FOG_OPEN_SEC = 3.5;         // 雾散开所用的时间
@@ -32,17 +33,22 @@ function fogOpen() {
 function startGame() {
   sfx.init();
   titleEl.classList.add('gone');
-  startIntro();
+  sfx.ui('open');
+  // 镜头真正拉近到位后，才允许放置、显示界面
+  let done = false;
+  const finish = () => { if (done) return; done = true; uiState.title = false; document.body.classList.remove('title'); titleEl.remove(); };
+  startIntro(finish);
+  setTimeout(finish, 8000);                       // 保险：无论如何 8 秒后解锁
+  setTimeout(() => sfx.whoosh(4.2), 250);
   setTimeout(() => {
     addVoxel(0, 0, 0);                           // 第一个白色方块
     openT = clock.elapsedTime; fogOpen();
   }, 700);
-  setTimeout(() => { uiState.title = false; document.body.classList.remove('title'); titleEl.remove(); }, 3200);
 }
 
 titleEl.addEventListener('click', e => {
   const b = e.target.closest('[data-go]');
   if (!b || titleEl.classList.contains('gone')) return;
   if (b.dataset.go === 'start') startGame();
-  else quitGame();
+  else { sfx.init(); sfx.ui('close'); quitGame(); }
 });

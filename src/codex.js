@@ -1,6 +1,7 @@
 import { PAL } from './config.js';
 import { discovered } from './progress.js';
 import { uiState } from './ui.js';
+import { sfx } from './audio.js';
 
 // ================= 图鉴：按 B 打开 / 关闭 =================
 // 每种建筑一个像素剪影：没发现时是暗色剪影，发现后换成这种建筑的配色
@@ -50,7 +51,9 @@ function render() {
 
 // 打开 / 关闭（按键由 menu.js 统一处理）
 function toggleCodex(force) {
+  const was = uiState.codex;
   uiState.codex = force ?? !uiState.codex;
+  if (was !== uiState.codex) { sfx.init(); sfx.ui(uiState.codex ? 'open' : 'close'); }
   if (uiState.codex) render();
   el.classList.toggle('open', uiState.codex);
 }

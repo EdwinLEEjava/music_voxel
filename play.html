@@ -936,6 +936,47 @@ const sfx = (() => {
     tap(pan) { if (!ok()) return; const t = now(); bubble(t, pan, true, 180, 90, 0.3); splash(t, pan, 0.07); },
     tiny(pan) { if (ok()) bubble(now(), pan, false, 420 + Math.random() * 300, 800 + Math.random() * 400, 0.04); },
     undo() { if (ok()) bubble(now(), 0, true, 520, 160, 0.25); },
+    // 开场镜头拉近：一段“呼吸”般的风声（扫频的过滤噪声）+ 两个慢慢浮起的高音，空、远、轻
+    whoosh(dur = 4) {
+      if (!ok()) return;
+      const t = now(), nodes = [], srcs = [], g = out(0, false, nodes), end = t + dur + 0.2;
+      const len = Math.floor(ctx.sampleRate * (dur + 0.2)), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const ns = ctx.createBufferSource(); ns.buffer = buf;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+      bp.frequency.setValueAtTime(260, t);
+      bp.frequency.exponentialRampToValueAtTime(1500, t + dur * 0.55);
+      bp.frequency.exponentialRampToValueAtTime(420, t + dur);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, t);
+      ng.gain.exponentialRampToValueAtTime(0.1, t + dur * 0.5);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      ns.connect(bp); bp.connect(ng); ng.connect(g); ns.start(t); ns.stop(end);
+      nodes.push(ns, bp, ng); srcs.push(ns);
+      for (const [f, v] of [[587, 0.028], [880, 0.02]]) {      // D5、A5：空灵的五度
+        const o = osc('sine', f, t, end, nodes, srcs), og = ctx.createGain();
+        o.detune.value = (Math.random() - 0.5) * 8;
+        og.gain.setValueAtTime(0.0001, t);
+        og.gain.exponentialRampToValueAtTime(v, t + dur * 0.6);
+        og.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.1);
+        o.connect(og); og.connect(g); nodes.push(og);
+      }
+      g.gain.value = 1;
+      register(g, nodes, srcs, end);
+    },
+    // 界面音效：像轻敲玻璃，音量很小、混响很长。open 上行两音、close 下行两音、tap 单音
+    ui(kind = 'tap') {
+      if (!ok()) return;
+      const t = now(), seq = kind === 'open' ? [784, 1175] : kind === 'close' ? [1175, 784] : [988];
+      seq.forEach((f, i) => {
+        const nodes = [], srcs = [], g = out(0, false, nodes), s = t + i * 0.07, end = s + 0.9;
+        const o = osc('sine', f, s, end, nodes, srcs), o2 = osc('sine', f * 2.01, s, end, nodes, srcs), g2 = ctx.createGain();
+        g2.gain.value = 0.15; o2.connect(g2); g2.connect(g); nodes.push(g2);
+        o.connect(g);
+        env(g, s, 0.045, 0.004, 0.8);
+        register(g, nodes, srcs, end);
+      });
+    },
   };
 })();
 const panOf = w => ((w.x - view.x) - (w.z - view.z)) / Math.max(6, spanR * 2 + 4);
@@ -1525,7 +1566,9 @@ function render() {
 
 // 打开 / 关闭（按键由 menu.js 统一处理）
 function toggleCodex(force) {
+  const was = uiState.codex;
   uiState.codex = force ?? !uiState.codex;
+  if (was !== uiState.codex) { sfx.init(); sfx.ui(uiState.codex ? 'open' : 'close'); }
   if (uiState.codex) render();
   el.classList.toggle('open', uiState.codex);
 }
@@ -1592,7 +1635,9 @@ function renderSettings() {
     <div class="set-body">${TABS[tab].html()}</div></div><div class="set-foot">Esc 返回游戏</div>`;
 }
 function toggleSettings(force) {
+  const was = uiState.settings;
   uiState.settings = force ?? !uiState.settings;
+  if (was !== uiState.settings) { sfx.init(); sfx.ui(uiState.settings ? 'open' : 'close'); }
   if (uiState.settings) { tab = 'controls'; renderSettings(); toggleCodex(false); }
   panel.classList.toggle('open', uiState.settings);
 }
@@ -1602,20 +1647,22 @@ const quitEl = document.createElement('div');
 quitEl.id = 'quit';
 quitEl.innerHTML = '<div>已退出</div><div class="quit-sub">可以关闭这个页面 · 点击任意处回到游戏</div>';
 document.body.appendChild(quitEl);
-quitEl.addEventListener('pointerdown', () => quitEl.classList.remove('open'));
+quitEl.addEventListener('pointerdown', () => { quitEl.classList.remove('open'); sfx.ui('open'); });
 function quitGame() { window.close(); quitEl.classList.add('open'); }
 
 panel.addEventListener('click', e => {
   const t = e.target.closest('[data-tab]'), d = e.target.closest('[data-do]');
-  if (t) { tab = t.dataset.tab; renderSettings(); }
-  else if (d && d.dataset.do === 'reset') location.reload();
+  if (t) { if (tab !== t.dataset.tab) sfx.ui(); tab = t.dataset.tab; renderSettings(); }
+  else if (d && d.dataset.do === 'reset') { sfx.ui('close'); setTimeout(() => location.reload(), 350); }
   else if (d && d.dataset.do === 'quit') { toggleSettings(false); quitGame(); }
   else if (e.target === panel) toggleSettings(false);
 });
 
 function toggleSound() {
   sfx.init();
-  soundIcon.innerHTML = sfx.toggle() ? ICON.soundOn : ICON.soundOff;
+  const on = sfx.toggle();
+  soundIcon.innerHTML = on ? ICON.soundOn : ICON.soundOff;
+  if (on) sfx.ui();                     // 打开音效时轻响一下（关掉时自然没有声音）
 }
 
 bar.addEventListener('click', e => {
@@ -1963,9 +2010,9 @@ addEventListener('resize', () => {
 // ======================= src/main.js =======================
 // ================= 主循环 =================
 const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
-let camDist = 8, introUntil = 0;
-// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）
-function startIntro() { camDist = 70; introUntil = clock.elapsedTime + 5; }
+let camDist = 8, introUntil = 0, introDone = null;
+// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）；真正拉近到位时调用 onDone
+function startIntro(onDone) { camDist = 70; introUntil = Infinity; introDone = onDone; }
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -2010,7 +2057,8 @@ function frame() {
   updatePan(dt);
   view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
-  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 0.75 : 2.5)));
+  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 1.0 : 2.5)));
+  if (introDone && Math.abs(camDist - fit * zoom) < 0.4) { introUntil = 0; const f = introDone; introDone = null; f(); }
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
 
@@ -2022,7 +2070,8 @@ function frame() {
 
   // 悬停预览
   let target = null;
-  if (!n) target = { x: 0, y: 0, z: 0, from: null };
+  if (uiState.title) { /* 开场还没结束：不显示预览 */ }
+  else if (!n) target = { x: 0, y: 0, z: 0, from: null };
   else if (pointer.has && pointers.size === 0) target = pickCell(pointer.x, pointer.y);
   if (target && n && lastPickDist >= TAP_FAR) target = null;
   if (target) {
@@ -2043,7 +2092,8 @@ requestAnimationFrame(frame);
 // ======================= src/title.js =======================
 // ================= 开始页面 =================
 // 开始前：世界整个藏在雾里，只显示游戏名和两个文字按钮
-// 点“开始游戏”：页面淡出 → 镜头从远处拉近 → 中心出现第一个白色方块 → 雾从方块周围散开到平时的范围
+// 点“开始游戏”：页面淡出 → 镜头从远处拉近（风声）→ 中心出现第一个白色方块 → 雾从方块周围散开到平时的范围
+// 镜头完全拉近之前不能放置、不显示预览
 const GAME_NAME = '水中体素';
 const FOG_HIDDEN = -7;            // 雾推到负数：整片海都藏在雾里
 const FOG_OPEN_SEC = 3.5;         // 雾散开所用的时间
@@ -2067,19 +2117,24 @@ function fogOpen() {
 function startGame() {
   sfx.init();
   titleEl.classList.add('gone');
-  startIntro();
+  sfx.ui('open');
+  // 镜头真正拉近到位后，才允许放置、显示界面
+  let done = false;
+  const finish = () => { if (done) return; done = true; uiState.title = false; document.body.classList.remove('title'); titleEl.remove(); };
+  startIntro(finish);
+  setTimeout(finish, 8000);                       // 保险：无论如何 8 秒后解锁
+  setTimeout(() => sfx.whoosh(4.2), 250);
   setTimeout(() => {
     addVoxel(0, 0, 0);                           // 第一个白色方块
     openT = clock.elapsedTime; fogOpen();
   }, 700);
-  setTimeout(() => { uiState.title = false; document.body.classList.remove('title'); titleEl.remove(); }, 3200);
 }
 
 titleEl.addEventListener('click', e => {
   const b = e.target.closest('[data-go]');
   if (!b || titleEl.classList.contains('gone')) return;
   if (b.dataset.go === 'start') startGame();
-  else quitGame();
+  else { sfx.init(); sfx.ui('close'); quitGame(); }
 });
 </script>
 </body>

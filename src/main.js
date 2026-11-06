@@ -4,6 +4,7 @@ import { VIEW_DIR, camera, clock, renderer, scene } from './core.js';
 import { U, waterMat } from './water.js';
 import { bodies, rebuildBody, spanR, tmpT, view, viewTarget, voxels } from './world.js';
 import { processQueue } from './notes.js';
+import { uiState } from './ui.js';
 import './codex.js';
 import './menu.js';
 import './title.js';
@@ -14,9 +15,9 @@ import { ghost, ghostEdges, lastPickDist, pan, pickCell, pointer, pointers, upda
 
 // ================= 主循环 =================
 const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
-let camDist = 8, introUntil = 0;
-// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）
-function startIntro() { camDist = 70; introUntil = clock.elapsedTime + 5; }
+let camDist = 8, introUntil = 0, introDone = null;
+// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）；真正拉近到位时调用 onDone
+function startIntro(onDone) { camDist = 70; introUntil = Infinity; introDone = onDone; }
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -61,7 +62,8 @@ function frame() {
   updatePan(dt);
   view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
-  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 0.75 : 2.5)));
+  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 1.0 : 2.5)));
+  if (introDone && Math.abs(camDist - fit * zoom) < 0.4) { introUntil = 0; const f = introDone; introDone = null; f(); }
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
 
@@ -73,7 +75,8 @@ function frame() {
 
   // 悬停预览
   let target = null;
-  if (!n) target = { x: 0, y: 0, z: 0, from: null };
+  if (uiState.title) { /* 开场还没结束：不显示预览 */ }
+  else if (!n) target = { x: 0, y: 0, z: 0, from: null };
   else if (pointer.has && pointers.size === 0) target = pickCell(pointer.x, pointer.y);
   if (target && n && lastPickDist >= TAP_FAR) target = null;
   if (target) {
