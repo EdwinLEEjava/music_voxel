@@ -24,7 +24,7 @@ fish.renderOrder = 5;          // 先于水面绘制，看起来在水下
 fish.visible = false;
 scene.add(fish);
 
-const pos = new THREE.Vector3(3, WATER_Y - 0.4, 3), vel = new THREE.Vector3();
+const fishPos = new THREE.Vector3(3, WATER_Y - 0.4, 3), vel = new THREE.Vector3();
 let heading = 0, orbitA = 0, visit = null, visitUntil = 0, greeted = true;
 const SPEED = 1.1, VISIT_SPEED = 2.4;
 
@@ -37,7 +37,7 @@ function notice(x, z) {
 
 function updateCompanion(t, dt) {
   if (!voxels.length) { fish.visible = false; return; }
-  if (!fish.visible) { pos.set(viewTarget.x + spanR + 3, WATER_Y - 0.4, viewTarget.z); fish.visible = true; }
+  if (!fish.visible) { fishPos.set(viewTarget.x + spanR + 3, WATER_Y - 0.4, viewTarget.z); fish.visible = true; }
 
   // 目标：要么是玩家刚动过的地方，要么是绕结构的圆上一点
   let target, speed;
@@ -49,12 +49,12 @@ function updateCompanion(t, dt) {
     target = new THREE.Vector3(viewTarget.x + Math.cos(orbitA) * r, 0, viewTarget.z + Math.sin(orbitA) * r);
     speed = SPEED;
   }
-  const to = new THREE.Vector3(target.x - pos.x, 0, target.z - pos.z), dist = to.length();
+  const to = new THREE.Vector3(target.x - fishPos.x, 0, target.z - fishPos.z), dist = to.length();
   // 到了玩家放置的地方：冒个泡、轻响一声，然后回去转圈
   if (visit && dist < 0.9 && !greeted) {
     greeted = true; visitUntil = t + 1.2;
-    addRipple(pos.x, pos.z, 0.06);
-    sfx.tiny(panOf(pos));
+    addRipple(fishPos.x, fishPos.z, 0.06);
+    sfx.tiny(panOf(fishPos));
   }
   const want = dist > 0.05 ? Math.atan2(-to.z, to.x) : heading;
   let dh = want - heading;
@@ -62,10 +62,10 @@ function updateCompanion(t, dt) {
   heading += dh * Math.min(1, dt * 3);
   const v = speed * Math.min(1, dist / 1.5);
   vel.set(Math.cos(heading) * v, 0, -Math.sin(heading) * v);
-  pos.addScaledVector(vel, dt);
-  pos.y = WATER_Y - 0.4 + Math.sin(t * 1.3) * 0.08;
+  fishPos.addScaledVector(vel, dt);
+  fishPos.y = WATER_Y - 0.4 + Math.sin(t * 1.3) * 0.08;
 
-  fish.position.copy(pos);
+  fish.position.copy(fishPos);
   fish.rotation.set(0, heading, Math.sin(t * 1.3) * 0.08);
   tailPivot.rotation.y = Math.sin(t * (6 + v * 4)) * 0.5;   // 游得越快，尾巴摆得越快
 }

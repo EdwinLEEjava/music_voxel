@@ -10,6 +10,25 @@ const read = p => readFileSync(join(root, p), 'utf8');
 // 模块顺序：被依赖、且在顶层就要用到的模块放前面
 const ORDER = ['config', 'core', 'ui', 'water', 'world', 'audio', 'notes', 'features', 'progress', 'codex', 'companion', 'overlays', 'input', 'main'];
 
+// 所有模块会合并进同一个作用域：顶层重名会让 play.html 直接报错，这里提前拦下
+{
+  const seen = new Map(), dups = [];
+  for (const name of ORDER) for (const line of read(`src/${name}.js`).split('\n')) {
+    const m = line.match(/^(?:const|let|var|function|class)\s+(.*)/);
+    if (!m) continue;
+    let names;
+    if (/^(function|class)/.test(line)) names = [m[1].match(/^[\w$]+/)[0]];
+    else {
+      let depth = 0, cur = ''; const parts = [];
+      for (const ch of m[1]) { if ('([{'.includes(ch)) depth++; if (')]}'.includes(ch)) depth--; if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; } else cur += ch; }
+      parts.push(cur);
+      names = parts.map(p => (p.trim().match(/^[\w$]+/) || [])[0]).filter(Boolean);
+    }
+    for (const n of names) { if (seen.has(n)) dups.push(`${n}（${seen.get(n)}.js 和 ${name}.js）`); else seen.set(n, name); }
+  }
+  if (dups.length) { console.error('构建失败：模块顶层变量重名 → ' + dups.join('、')); process.exit(1); }
+}
+
 const parts = ORDER.map(name => {
   const src = read(`src/${name}.js`)
     .replace(/^import[^\n]*\n/gm, '')          // 去掉 import 行
