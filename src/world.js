@@ -163,7 +163,7 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     sfx.place(v, tmpW);
     notice(tmpW.x, tmpW.z);
   }
-  updateFeatures(!opts.silent);
+  updateFeatures(!opts.silent, key(x, y, z));
   if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
   updateBounds(); updateHud();
   return v;

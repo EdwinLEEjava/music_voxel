@@ -535,7 +535,7 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     sfx.place(v, tmpW);
     notice(tmpW.x, tmpW.z);
   }
-  updateFeatures(!opts.silent);
+  updateFeatures(!opts.silent, key(x, y, z));
   if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
   updateBounds(); updateHud();
   return v;
@@ -1054,13 +1054,12 @@ function detectArches() {
   return out;
 }
 // 长桥：同层直线 ≥8 格
-// free(x,y,z)：这一格能不能算进来（没被其他类别占用）；长桥可以从别的建筑上延伸出来
-function detectBridges(free = S) {
+function detectBridges() {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [0, 1]]) {
-    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y, v.z - az)) continue;
+    if (S(v.x - ax, v.y, v.z - az)) continue;
     let len = 1;
-    while (free(v.x + ax * len, v.y, v.z + az * len)) len++;
+    while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
     if (len >= NEED.bridge) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
   }
   return out;
@@ -1076,12 +1075,12 @@ function detectPlatforms() {
   return out;
 }
 // 阶梯：每级前进 1 格、升高 1 格，连续 ≥4 级
-function detectStairs(free = S) {
+function detectStairs() {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y - 1, v.z - az)) continue;
+    if (S(v.x - ax, v.y - 1, v.z - az)) continue;
     let n = 1;
-    while (free(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+    while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
     if (n >= NEED.stair) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
   }
   return out;
@@ -1210,14 +1209,13 @@ function blend(building, inst) {
 }
 
 // ———— 方块归属 ————
-// 一个方块一旦属于某种建筑，就只能被同类建筑共用（例如两座拱门共用一根柱子），
-// 不能再算进其他类别。建筑在它的方块全部存在时一直保留归属，拆掉其中任意一块才会释放。
-const PRIORITY = ['anchor', 'tower', 'arch', 'ring', 'stair', 'bridge', 'platform'];   // 同一次放置同时成立时，先到先得的顺序
+// 同一时间一个方块只属于一个建筑。新造的建筑会替换掉和它重叠的旧建筑
+// （例如先造灯塔、再补横梁成拱门 → 灯塔被拱门替换）。
+// 只有包含“刚放下的那个方块”的建筑才能替换别人，所以被替换的旧建筑不会在之后又抢回来。
+// 建筑在它的方块全部存在时一直保留，拆掉其中任意一块才会释放。
+const PRIORITY = ['anchor', 'tower', 'arch', 'ring', 'stair', 'bridge', 'platform'];   // 同一次放置同时成立多个时，先到先得的顺序
 const PLURAL = { tower: 'towers', ring: 'rings', arch: 'arches', bridge: 'bridges', platform: 'platforms', anchor: 'anchors', stair: 'stairs' };
-const instances = new Map();
-// 可以共用方块的类别组合（例如灯塔立在拱门的柱子上、长柱水下是深锚水上是灯塔）
-const COMPAT = { tower: ['arch', 'anchor'], arch: ['tower'], anchor: ['tower'] };
-const ok = (type, owners) => !owners || [...owners].every(o => o === type || (COMPAT[type] || []).includes(o));   // "类型|key" -> { type, fk, data, cells: [格子key] }
+const instances = new Map();       // "类型|key" -> { type, fk, data, cells: [格子key] }
 
 // 每种建筑占用了哪些方块
 function cellsOf(type, d) {
@@ -1239,54 +1237,40 @@ function cellsOf(type, d) {
   return out;
 }
 
-function updateFeatures(allowFx) {
+// placed：刚放下的方块的格子 key（拆除、重置时为 null）
+function updateFeatures(allowFx, placed = null) {
   const runs = columnRuns();
-  const C = { ring: detectRings(), arch: detectArches(), platform: detectPlatforms() };
+  const C = { tower: detectTowers(runs), anchor: detectAnchors(runs), ring: detectRings(), arch: detectArches(),
+    bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
   // 1) 方块被拆掉的建筑失效，释放归属
   for (const [id, ins] of instances) if (ins.cells.some(c => !grid.has(c))) instances.delete(id);
-  const claim = new Map();
-  const own = (c, type) => { if (!claim.has(c)) claim.set(c, new Set()); claim.get(c).add(type); };
-  for (const ins of instances.values()) for (const c of ins.cells) own(c, ins.type);
-  const allowed = (type, cells) => cells.every(c => ok(type, claim.get(c)));
+  const claim = new Map();           // 格子 key -> 建筑 id
+  for (const [id, ins] of instances) for (const c of ins.cells) claim.set(c, id);
+  const evict = id => { const ins = instances.get(id); if (!ins) return; for (const c of ins.cells) if (claim.get(c) === id) claim.delete(c); instances.delete(id); };
 
-  // 2) 按优先级接纳本次识别到的建筑；占用了其他类别方块的候选直接忽略
-  const fresh = [], detected = new Set();
-  // 竖直的柱子（灯塔 / 深锚）只用没被其他类别占用的那一段来判断
-  const freeRuns = type => {
-    const out = [];
-    for (const r of runs) {
-      let start = null;
-      for (let y = r.bottom; y <= r.top + 1; y++) {
-        const free = y <= r.top && ok(type, claim.get(key(r.x, y, r.z)));
-        if (free && start === null) start = y;
-        if (!free && start !== null) { out.push({ x: r.x, z: r.z, bottom: start, top: y - 1, h: y - start }); start = null; }
-      }
-    }
-    return out;
-  };
-  const freeFor = type => (x, y, z) => S(x, y, z) && ok(type, claim.get(key(x, y, z)));
-  const detect = type => type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor'))
-    : type === 'bridge' ? detectBridges(freeFor('bridge')) : type === 'stair' ? detectStairs(freeFor('stair')) : C[type];
-  for (const type of PRIORITY) for (const [fk, data] of detect(type)) {
+  // 2) 按优先级处理本次识别到的建筑
+  const fresh = [], made = new Set();   // made：这次新出现、或包含刚放下方块的建筑，同一次里不会再被别的候选替换
+  for (const type of PRIORITY) for (const [fk, data] of C[type]) {
     const id = type + '|' + fk, cells = cellsOf(type, data);
-    if (!cells.length || !allowed(type, cells)) continue;
-    detected.add(id);
+    if (!cells.length) continue;
+    const others = new Set(cells.map(c => claim.get(c)).filter(o => o && o !== id));
+    if (others.size) {
+      // 和别的建筑重叠：只有包含刚放下的方块、且对方不是这次刚接纳的，才能替换
+      if (!placed || !cells.includes(placed) || [...others].some(o => made.has(o))) continue;
+      for (const o of others) evict(o);
+    }
     const old = instances.get(id);
     if (old) {
       if (type === 'ring') { data.timer = old.data.timer; data.popT = old.data.popT; }
       if (type === 'tower' && data.h > old.data.h) fresh.push(old);   // 灯塔长高：再响一次
+      for (const c of old.cells) if (claim.get(c) === id) claim.delete(c);
       old.data = data; old.cells = cells;
     } else {
       const ins = { type, fk, data, cells };
       instances.set(id, ins); fresh.push(ins);
     }
-    for (const c of cells) own(c, type);
-  }
-  // 3) 没再被识别到、但被同类新建筑覆盖的旧建筑（如环被扩大、长桥向前延伸）移除
-  for (const [id, ins] of instances) {
-    if (detected.has(id)) continue;
-    const covered = [...instances.values()].some(o => o !== ins && o.type === ins.type && detected.has(o.type + '|' + o.fk) && o.cells.some(c => ins.cells.includes(c)));
-    if (covered) instances.delete(id);
+    for (const c of cells) claim.set(c, id);
+    if (!old || (placed && cells.includes(placed))) made.add(id);
   }
 
   // 4) 新建筑的发现反应
