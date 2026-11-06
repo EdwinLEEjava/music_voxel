@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { TAP_FAR, TYPE_INST, WATER_Y, ZMAX, ZMIN } from './config.js';
 import { VIEW_DIR, camera, renderer, scene } from './core.js';
 import { hintEl, uiState } from './ui.js';
-import { NB, S, addVoxel, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
+import { NB, S, addVoxel, blocked, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { waterTap } from './notes.js';
 import { restartLevel } from './level.js';
@@ -42,7 +42,7 @@ function pickCell(px, py) {
   const h = rayHit(px, py);
   if (h) {
     const c = { x: h.v.x + Math.round(h.n.x), y: h.v.y + Math.round(h.n.y), z: h.v.z + Math.round(h.n.z), from: h.v };
-    if (!S(c.x, c.y, c.z)) return c;
+    if (!S(c.x, c.y, c.z) && !blocked.has(key(c.x, c.y, c.z))) return c;
   }
   let best = null, bestD = Infinity;
   const p = new THREE.Vector3();
@@ -51,7 +51,7 @@ function pickCell(px, py) {
     const ray = raycaster.ray.clone().applyMatrix4(invM);
     for (const v of b.voxels) for (const [dx, dy, dz] of NB) {
       const x = v.x + dx, y = v.y + dy, z = v.z + dz;
-      if (S(x, y, z)) continue;
+      if (S(x, y, z) || blocked.has(key(x, y, z))) continue;
       p.set(x, y, z);
       const d = ray.distanceSqToPoint(p) + p.clone().sub(ray.origin).dot(ray.direction) * 0.0004;
       if (d < bestD) { bestD = d; best = { x, y, z, from: v }; }

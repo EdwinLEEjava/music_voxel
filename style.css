@@ -88,3 +88,10 @@
   /* 开始前隐藏游戏界面，开场结束后淡入 */
   #bar, #hud, #hint { transition: opacity 1.2s; }
   body.title #bar, body.title #hud, body.title #hint { opacity: 0; pointer-events: none; }
+  /* 小船头上闪烁的问号 */
+  .boat-q {
+    position: fixed; transform: translate(-50%, -100%); display: none; pointer-events: none; z-index: 2;
+    color: rgba(255,255,255,.85); font: 300 20px/1 system-ui, sans-serif; animation: boat-q 1.6s ease-in-out infinite;
+  }
+  @keyframes boat-q { 0%, 100% { opacity: .15; } 50% { opacity: .9; } }
+  body.title .boat-q { display: none !important; }

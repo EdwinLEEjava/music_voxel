@@ -96,6 +96,13 @@
   /* 开始前隐藏游戏界面，开场结束后淡入 */
   #bar, #hud, #hint { transition: opacity 1.2s; }
   body.title #bar, body.title #hud, body.title #hint { opacity: 0; pointer-events: none; }
+  /* 小船头上闪烁的问号 */
+  .boat-q {
+    position: fixed; transform: translate(-50%, -100%); display: none; pointer-events: none; z-index: 2;
+    color: rgba(255,255,255,.85); font: 300 20px/1 system-ui, sans-serif; animation: boat-q 1.6s ease-in-out infinite;
+  }
+  @keyframes boat-q { 0%, 100% { opacity: .15; } 50% { opacity: .9; } }
+  body.title .boat-q { display: none !important; }
 </style>
 </head>
 <body>
@@ -198,8 +205,8 @@ const U = {
   uFogTex: { value: null }, uFogO: { value: new THREE.Vector2() }, uFogS: { value: new THREE.Vector2(1, 1) },
   uFogNear: { value: 0.8 }, uFogFar: { value: 5.5 },
   uFogPush: { value: 0 },          // 结局：雾被推远的距离（格）
-  // 灯塔的光：每座点亮的灯塔在雾里撑开一个圆（x, z, 半径, 未用），最多 4 座
-  uLights: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, -99, 0)) },
+  // 雾里撑开的圆（x, z, 半径, 未用）：0、1 灯塔的光  3 开场  4、5 小船周围
+  uLights: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -99, 0)) },
   uFogCol: { value: new THREE.Color(0, 0, 0) },
   uProg: { value: 0 },
   uFinale: { value: 0 },           // 结局的高潮：月光、星光、方块一起亮起，之后停在一个略亮的“苏醒”状态
@@ -258,10 +265,10 @@ float waterH(vec2 p) { return waveBase(p) + ripples(p); }
 uniform sampler2D uFogTex;
 uniform vec2 uFogO, uFogS;
 uniform float uFogNear, uFogFar, uFogPush;
-uniform vec4 uLights[4];
+uniform vec4 uLights[6];
 float fogAmt(vec2 p) {
   float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 51.0;   // 存的是距离 ×5，最远 51 格
-  for (int i = 0; i < 4; i++) d = min(d, length(p - uLights[i].xy) - uLights[i].z);   // 灯塔驱散黑暗
+  for (int i = 0; i < 6; i++) d = min(d, length(p - uLights[i].xy) - uLights[i].z);   // 灯塔驱散黑暗
   // 域扭曲：先用一层慢噪声把采样位置“吹歪”，雾絮就会卷动、流动
   float t = uTime;
   vec2 q = p + vec2(vnoise(p * 0.18 + vec2(t * 0.11, 0.0)), vnoise(p * 0.18 + vec2(7.1, -t * 0.09))) * 3.0;
@@ -452,6 +459,7 @@ const key = (x, y, z) => x + ',' + y + ',' + z;
 const NB = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
 const S = (x, y, z) => grid.has(key(x, y, z));
 const bodies = new Set();
+const blocked = new Set();         // 不能放方块的格子（例如房子模型占着的地方），由关卡填写
 
 const FACES = [
   { n: [ 1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] }, { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0] },
@@ -580,7 +588,7 @@ function impulse(b, v) {
 // ================= 放置 / 拆除 =================
 const tmpW = new THREE.Vector3();
 function addVoxel(x, y, z, inst = null, opts = {}) {
-  if (S(x, y, z)) return null;
+  if (S(x, y, z) || (!opts.relic && blocked.has(key(x, y, z)))) return null;
   const touching = new Set();
   for (const [dx, dy, dz] of NB) { const n = grid.get(key(x + dx, y + dy, z + dz)); if (n) touching.add(n.body); }
   let b;
@@ -1786,7 +1794,7 @@ function overlayMesh(geo, max, order) {
 const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
-// 塔顶的余烬：灰色微尘从塔顶慢慢飘起、摇摆、淡出（关卡往 glows 里放 { x, y, z, kind: 'ember' }）
+// 熄灭的灯的余烬：灰色微尘慢慢飘起、摇摆、淡出（关卡往 glows 里放 { x, y, z, body, kind: 'ember' }）
 const ASH_MAX = 80;
 const ashMesh = overlayMesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), ASH_MAX, 16);
 const glows = [], ash = [];
@@ -1794,6 +1802,13 @@ const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17
 const hintMesh = overlayMesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), 8, 13);
 const flashes = [], bubbles = [];
 const alive = v => grid.get(key(v.x, v.y, v.z)) === v;
+// 灯塔的顶：可能是一个方块，也可能是放在方块上的灯（那一格没有方块）→ 用下面那格 + 偏移
+function towerTop(tw) {
+  const v = grid.get(key(tw.x, tw.top, tw.z));
+  if (v) return { v, dy: 0 };
+  const u = grid.get(key(tw.x, tw.top - 1, tw.z));
+  return u ? { v: u, dy: 1 } : null;
+}
 
 function spawnBubble(r, speed) {
   if (bubbles.length >= BUB_MAX || !r.wall) return;
@@ -1825,9 +1840,9 @@ function updateOverlays(t, dt) {
   let mi = 0;
   const pulse = 0.09 + 0.05 * Math.sin(t * 2.2);
   for (const tw of features.towers.values()) {
-    const v = grid.get(key(tw.x, tw.top, tw.z));
-    if (!v || mi >= MARK_MAX) continue;
-    markMesh.setMatrixAt(mi, voxelMatrix(v, m4));
+    const tt = towerTop(tw);
+    if (!tt || mi >= MARK_MAX) continue;
+    markMesh.setMatrixAt(mi, voxelMatrix(tt.v, m4, tt.dy));
     markMesh.setColorAt(mi++, col.setRGB(pulse * 2.2, pulse * 1.7, pulse * 0.5));
   }
   for (const a of features.arches.values()) for (let i = 1; i < a.k && mi < MARK_MAX; i++) {
@@ -1839,12 +1854,11 @@ function updateOverlays(t, dt) {
   markMesh.count = mi;
   // 余烬粒子：每处每秒冒出约 3 粒
   for (const g of glows) {
-    const v = grid.get(key(g.x, g.y, g.z));
-    if (!v || v.hidden || g.kind !== 'ember') continue;
+    if (!g.body || !bodies.has(g.body) || g.hidden || g.kind !== 'ember') continue;   // 关卡给出灯所在的物块和格子
     g.acc = (g.acc || 0) + dt * 3;
     while (g.acc > 1 && ash.length < ASH_MAX) {
       g.acc -= 1;
-      ash.push({ body: v.body, x: g.x + (Math.random() - 0.5) * 0.5, y: g.y + 0.5, z: g.z + (Math.random() - 0.5) * 0.5,
+      ash.push({ body: g.body, x: g.x + (Math.random() - 0.5) * 0.3, y: g.y + 0.25, z: g.z + (Math.random() - 0.5) * 0.5,
         vy: 0.25 + Math.random() * 0.25, ph: Math.random() * 6.28, t0: t, life: 2.2 + Math.random() * 1.5 });
     }
   }
@@ -1899,11 +1913,11 @@ function updateOverlays(t, dt) {
     scene.add(m); beams.push(m);
   }
   beams.forEach((m, i) => {
-    const tw = list[i], v = tw && grid.get(key(tw.x, tw.top, tw.z));
-    m.visible = !!v;
-    if (!v) return;
+    const tt = list[i] && towerTop(list[i]);
+    m.visible = !!tt;
+    if (!tt) return;
     m5.makeRotationY(t * 0.9 + i * 1.7).multiply(m4.makeRotationZ(-0.08));
-    m.matrix.multiplyMatrices(voxelMatrix(v, m4, 0.1), m5);
+    m.matrix.multiplyMatrices(voxelMatrix(tt.v, m4, tt.dy + 0.1), m5);
   });
 }
 
@@ -1941,7 +1955,7 @@ function pickCell(px, py) {
   const h = rayHit(px, py);
   if (h) {
     const c = { x: h.v.x + Math.round(h.n.x), y: h.v.y + Math.round(h.n.y), z: h.v.z + Math.round(h.n.z), from: h.v };
-    if (!S(c.x, c.y, c.z)) return c;
+    if (!S(c.x, c.y, c.z) && !blocked.has(key(c.x, c.y, c.z))) return c;
   }
   let best = null, bestD = Infinity;
   const p = new THREE.Vector3();
@@ -1950,7 +1964,7 @@ function pickCell(px, py) {
     const ray = raycaster.ray.clone().applyMatrix4(invM);
     for (const v of b.voxels) for (const [dx, dy, dz] of NB) {
       const x = v.x + dx, y = v.y + dy, z = v.z + dz;
-      if (S(x, y, z)) continue;
+      if (S(x, y, z) || blocked.has(key(x, y, z))) continue;
       p.set(x, y, z);
       const d = ray.distanceSqToPoint(p) + p.clone().sub(ray.origin).dot(ray.direction) * 0.0004;
       if (d < bestD) { bestD = d; best = { x, y, z, from: v }; }
@@ -2145,20 +2159,22 @@ requestAnimationFrame(frame);
 // ======================= src/level.js =======================
 // ================= 关卡 =================
 // 第一关：灯塔
-// 雾散开 → 小岛、房子、港湾、未完成的塔 → 提示在塔顶 → 补 2 格点亮灯塔
-// → 灯光驱散雾，第二座岛出现 → 独立补 3 格 → 两座灯塔都亮起，找回第一种颜色
-// 关卡只检查“塔顶上方连续叠了几格”，其他搭建只会发声，不会触发任何东西
+// 雾散开 → 小岛、房子、港湾、未完成的塔（塔顶放着一盏熄灭的灯），远处一条小船头上闪着问号
+// → 在塔顶放方块，灯被顶上去 → 灯离水面够高（LAMP_LIT_Y）就亮 → 灯光驱散雾，第二座岛和它的船出现
+// → 独立把第二盏灯顶到同样高度 → 两座灯塔都亮，两条船回港，找回第一种颜色
+// 规则只有一条，而且在哪里都一样：灯够高就会亮。其他搭建只会发声，不会触发任何东西
 
 const C = h => new THREE.Color(h);
-// ———— 视觉语言：材质说明“这是谁的东西”，明暗说明“先看哪里”，光说明“该做什么” ————
-// 自然地形最暗、不规整；人造的房子港湾是中灰、规整；未完成的塔和玩家方块同为白色（白色 = 玩家的材料），
-// 用白 / 浅灰条纹表明它是灯塔，是全场最亮的东西
+// ———— 视觉语言：材质说明“这是谁的东西”，明暗说明“先看哪里”，灯和余烬说明“该做什么” ————
+// 自然地形最暗、不规整；人造的房子港湾是中灰、规整；未完成的塔和玩家方块同为白色（白色 = 玩家的材料）
 const MAT = {
   rock: C(0x3c3f44), rock2: C(0x46494e), ground: C(0x53575c),
-  house: C(0x8f9296), roof: C(0x63666b), harbor: C(0x6e7175),
+  house: C(0x8f9296), roof: C(0x63666b), harbor: C(0x6e7175), dark: C(0x45484d),
   stripeA: C(0xf4f4f4), stripeB: C(0xc9cacc),
 };
+const LAMP_LIT_Y = 6;                  // 灯离水面这么高（格）就能照到远处 → 点亮
 const LIGHT_R = 19, LIGHT_SEC = 4.5;   // 灯塔点亮后，光在雾里撑开的半径（格）和用时
+const BOAT_CLEAR = 2.6, BOAT_SEC = 9;  // 小船周围散开的雾（格）；回港用时（秒）
 
 const hash = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
 // 一座岩石岛：边缘缺几块、零星有凸起的岩石，形状不规整；keep 里的格子保证是平地（房子、港湾、塔脚）
@@ -2174,89 +2190,125 @@ function islandCells(cx, cz, r2Top, r2Base, keep = []) {
   return out;
 }
 const stripes = (x, z, y0, y1) => { const out = []; for (let y = y0; y <= y1; y++) out.push([x, y, z, y % 2 ? MAT.stripeB : MAT.stripeA]); return out; };
+const footprint = (x0, z0, w, d) => { const out = []; for (let i = 0; i < w; i++) for (let j = 0; j < d; j++) out.push([x0 + i, z0 + j]); return out; };
+
 const ISLANDS = [
-  { // 第一座：房子（亮着一扇窗）、伸出去的港湾、岬角上只差 2 格的塔
+  { // 第一座：房子、向左伸出去的港湾、岬角上的塔（灯在 4，要顶到 6：补 2 格）
     cells: () => [
-      ...islandCells(0, 0, 8, 5, [[-1, 0], [0, 0], [-1, 1], [0, 1], [1, 2], [1, 1], [2, -1], [3, -1]]),
+      ...islandCells(0, 0, 8, 5, [...footprint(-1, 0, 2, 2), [-2, 2], [3, -1]]),
       [3, 0, -1, MAT.rock2], [3, 0, -2, MAT.rock], [4, 0, -2, MAT.rock], [3, -1, -2, MAT.rock], [4, -1, -2, MAT.rock],
-      ...[[-1, 0], [0, 0], [-1, 1], [0, 1]].flatMap(([x, z]) => [[x, 1, z, MAT.house], [x, 2, z, MAT.house], [x, 3, z, MAT.roof]]),
-      [1, 0, 3, MAT.harbor], [1, 0, 4, MAT.harbor], [1, 0, 5, MAT.harbor], [1, 0, 6, MAT.harbor], [1, 1, 6, MAT.harbor],
+      [-3, 0, 2, MAT.harbor], [-4, 0, 2, MAT.harbor], [-5, 0, 2, MAT.harbor], [-6, 0, 2, MAT.harbor], [-6, 1, 2, MAT.harbor],
       ...stripes(4, -2, 1, 3),
     ],
-    glows: [{ x: 4, y: 3, z: -2, kind: 'ember' }],
-    tower: { x: 4, z: -2, bottom: 1, top: 3, need: 2 },
+    house: { x0: -1, z0: 0, w: 2, d: 2, h: 1.7 },
+    tower: { x: 4, z: -2, bottom: 1, top: 3 },
+    boat: { from: { x: -9.5, z: 6 }, to: { x: -5, z: 3.25 } },
   },
-  { // 第二座：类似的小岛，塔更矮，要独立补 3 格
+  { // 第二座：类似的小岛，塔更矮（灯在 3，要顶到 6：补 3 格），没有提示
     cells: () => [
-      ...islandCells(-13, -9, 5, 2, [[-14, -8], [-12, -10]]),
+      ...islandCells(-13, -9, 5, 2, [[-14, -8], [-15, -8]]),
       [-11, 0, -11, MAT.rock], [-12, 0, -11, MAT.rock2], [-11, -1, -11, MAT.rock],
-      [-14, 1, -8, MAT.house], [-14, 2, -8, MAT.house], [-14, 3, -8, MAT.roof],
-      [-13, 0, -6, MAT.harbor], [-13, 0, -5, MAT.harbor],
+      [-16, 0, -8, MAT.harbor], [-17, 0, -8, MAT.harbor], [-17, 1, -8, MAT.harbor],
       ...stripes(-11, -11, 1, 2),
     ],
-    glows: [{ x: -11, y: 2, z: -11, kind: 'ember' }],
-    tower: { x: -11, z: -11, bottom: 1, top: 2, need: 3 },
+    house: { x0: -14, z0: -8, w: 1, d: 1, h: 1.4 },
+    tower: { x: -11, z: -11, bottom: 1, top: 2 },
+    boat: { from: { x: -21, z: -4 }, to: { x: -16.5, z: -6.75 } },
   },
 ];
 
-// ———— 小船（灰色）：困在港湾外的黑暗里，第一座灯塔点亮后慢慢驶回港湾 ————
-const boatMat = new THREE.MeshStandardMaterial({ color: 0x7b7e83, roughness: 0.7 });
-makeUnderwater(boatMat);
-const boat = new THREE.Group();
-{
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 1.4), boatMat);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.32, 0.45), boatMat); cabin.position.set(0, 0.3, 0.25);
-  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.9, 0.06), boatMat); mast.position.set(0, 0.6, -0.25);
-  boat.add(hull, cabin, mast);
-}
-boat.renderOrder = 5; boat.visible = false;
-scene.add(boat);
-const BOAT_FROM = { x: 3.4, z: 11.5 }, BOAT_TO = { x: 2.2, z: 5.2 }, BOAT_SEC = 8;
-let boatT0 = -1;
+// ———— 模型：灯、房子、小船（都是灰色，挂在所在物块上，随岛一起浮动） ————
+const greyMat = hex => { const m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.75 }); makeUnderwater(m); return m; };
+const M = { frame: greyMat(0x5d6065), glass: greyMat(0x9a9da2), house: greyMat(0x8f9296), roof: greyMat(0x63666b), dark: greyMat(0x45484d), boat: greyMat(0x7b7e83) };
+const litGlass = new THREE.MeshBasicMaterial({ color: 0xffd34d });
+const box = (w, h, d, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); return m; };
 
-let stage = 0;                       // 0：补第一座塔  1：补第二座塔  2：本关完成
-let lit = [], lights = [], revealAt = null;
+// 灯：底座 + 灯罩 + 顶盖，占一格
+function makeLamp() {
+  const g = new THREE.Group(), glass = box(0.36, 0.4, 0.36, M.glass, 0, -0.14, 0);
+  g.add(box(0.56, 0.12, 0.56, M.frame, 0, -0.44, 0), glass, box(0.5, 0.1, 0.5, M.frame, 0, 0.11, 0), box(0.12, 0.12, 0.12, M.frame, 0, 0.22, 0));
+  g.userData.glass = glass;
+  return g;
+}
+// 房子：方形墙身 + 坡屋顶 + 烟囱 + 门和窗
+function makeHouse({ w, d, h }) {
+  const g = new THREE.Group();
+  g.add(box(w, h, d, M.house, 0, h / 2, 0));
+  const tri = new THREE.Shape();
+  tri.moveTo(-d / 2 - 0.15, 0); tri.lineTo(d / 2 + 0.15, 0); tri.lineTo(0, 0.55 + d * 0.2); tri.lineTo(-d / 2 - 0.15, 0);
+  const roofGeo = new THREE.ExtrudeGeometry(tri, { depth: w + 0.3, bevelEnabled: false }).translate(0, 0, -(w + 0.3) / 2).rotateY(Math.PI / 2);
+  const roof = new THREE.Mesh(roofGeo, M.roof); roof.position.y = h;
+  g.add(roof);
+  g.add(box(0.2, 0.5, 0.2, M.roof, w * 0.25, h + 0.45, -d * 0.2));          // 烟囱
+  g.add(box(0.32, 0.6, 0.04, M.dark, 0, 0.3, d / 2 + 0.01));                 // 门
+  g.add(box(0.04, 0.3, 0.3, M.dark, w / 2 + 0.01, h * 0.6, 0));              // 窗
+  return g;
+}
+function makeBoat() {
+  const g = new THREE.Group();
+  g.add(box(0.55, 0.3, 1.4, M.boat), box(0.4, 0.32, 0.45, M.boat, 0, 0.3, 0.25), box(0.06, 0.9, 0.06, M.boat, 0, 0.6, -0.25));
+  g.renderOrder = 5;
+  scene.add(g);
+  return g;
+}
+// 小船头上闪烁的问号
+function makeQuestion() {
+  const el = document.createElement('div');
+  el.className = 'boat-q'; el.textContent = '?';
+  document.body.appendChild(el);
+  return el;
+}
+
+// ———— 每座岛的运行状态 ————
+// { built, hidden, lamp, house, boat, q, lampY(显示用，平滑), lit, boatT0 }
+let isles = [], stage = 0, lights = [], revealAt = null;
+const v3 = new THREE.Vector3();
 
 function build(i, hidden) {
-  glows.push(...ISLANDS[i].glows);
-  for (const [x, y, z, col] of ISLANDS[i].cells()) addVoxel(x, y, z, null, { relic: true, col, silent: true, hidden });
+  const def = ISLANDS[i], s = isles[i];
+  for (const [x, y, z, col] of def.cells()) addVoxel(x, y, z, null, { relic: true, col, silent: true, hidden });
+  // 房子所在的格子不能放方块（模型占着）
+  const hs = def.house;
+  for (const [x, z] of footprint(hs.x0, hs.z0, hs.w, hs.d)) for (let y = 1; y <= 3; y++) blocked.add(key(x, y, z));
+  s.built = true; s.hidden = hidden;
+  s.lampY = def.tower.top + 1;
+  s.lamp.visible = s.house.visible = s.boat.visible = !hidden;
 }
-// 塔顶上方连续叠了几格
-function stacked(tw) { let n = 0; while (S(tw.x, tw.top + n + 1, tw.z)) n++; return n; }
-function towerData(tw) { const top = tw.top + stacked(tw); return { x: tw.x, z: tw.z, bottom: tw.bottom, top, h: top - tw.bottom + 1 }; }
+// 灯所在的高度 = 塔这一列最上面的方块 + 1
+function columnTop(tw) { let y = tw.top; while (S(tw.x, y + 1, tw.z)) y++; return y; }
+const lampCell = i => columnTop(ISLANDS[i].tower) + 1;
+function towerData(i) { const tw = ISLANDS[i].tower, top = lampCell(i); return { x: tw.x, z: tw.z, bottom: tw.bottom, top, h: top - tw.bottom + 1 }; }
 
-// 卡住时的“差一点”提示：当前那座塔顶的下一格
+// 卡住时的“差一点”提示：当前那盏灯所在的格子（再往这里放一格，灯就会被顶上去）
 function refresh() {
-  const tw = stage < 2 ? ISLANDS[stage].tower : null, hints = [];
-  if (tw) {
-    const n = stacked(tw), base = grid.get(key(tw.x, tw.top + n, tw.z));
-    if (base) hints.push({ x: tw.x, y: tw.top + n + 1, z: tw.z, body: base.body, w: 1 });
+  const hints = [];
+  if (stage < 2 && !isles[stage].hidden) {
+    const tw = ISLANDS[stage].tower, top = grid.get(key(tw.x, columnTop(tw), tw.z));
+    if (top) hints.push({ x: tw.x, y: lampCell(stage), z: tw.z, body: top.body, w: 1 });
   }
-  setLevelState(lit.map(towerData), hints);
+  setLevelState(isles.filter(s => s.lit).map(s => towerData(s.i)), hints);
 }
 
 function lightTower(i) {
-  const tw = ISLANDS[i].tower;
-  lit.push(tw);
-  const e = glows.findIndex(g => g.kind === 'ember' && g.x === tw.x && g.z === tw.z);
-  if (e >= 0) glows.splice(e, 1);
+  const s = isles[i];
+  s.lit = true;
+  s.lamp.userData.glass.material = litGlass;
   refresh();
-  REACT.tower(towerData(tw));                 // 塔身闪亮、钟声、涟漪
-  const top = grid.get(key(tw.x, towerData(tw).top, tw.z));
+  REACT.tower(towerData(i));                       // 塔身闪亮、钟声、涟漪
+  const tw = ISLANDS[i].tower, top = grid.get(key(tw.x, columnTop(tw), tw.z));
   if (top) toWorld(top, tmpW); else tmpW.set(tw.x, 0, tw.z);
-  lights.push({ i: lights.length, x: tmpW.x, z: tmpW.z, t0: clock.elapsedTime });
+  lights.push({ i, x: tmpW.x, z: tmpW.z, t0: clock.elapsedTime });
+  setTimeout(() => { s.boatT0 = clock.elapsedTime; }, 1500);   // 小船看到灯光，开始回港
   markProgress();
 }
 
 function onPlaced() {
-  if (stage >= 2) return;
-  const tw = ISLANDS[stage].tower;
-  if (stacked(tw) >= tw.need) {
+  if (stage >= 2 || !isles.length) return;
+  if (lampCell(stage) >= LAMP_LIT_Y) {
     const i = stage;
     stage++;                         // 先进入下一阶段，提示才会指向下一座塔（或消失）
     lightTower(i);
     if (stage === 1) {
-      setTimeout(() => { boatT0 = clock.elapsedTime; }, 1500);   // 小船看到灯光，开始回港
       // 第二座岛藏在雾里，等灯光扫到才出现
       build(1, true);
       const b = ISLANDS[1].tower;
@@ -2272,21 +2324,22 @@ function onPlaced() {
   refresh();
 }
 
-function updateLevel(t) {
-  // 小船：平时在原地轻轻起伏，回港时沿直线慢慢驶近
-  if (boat.visible) {
-    const a = boatT0 < 0 ? 0 : Math.min(1, (t - boatT0) / BOAT_SEC), e = a * a * (3 - 2 * a);
-    const x = BOAT_FROM.x + (BOAT_TO.x - BOAT_FROM.x) * e, z = BOAT_FROM.z + (BOAT_TO.z - BOAT_FROM.z) * e;
-    boat.position.set(x, 0.05 + Math.sin(t * 0.9) * 0.06, z);
-    boat.rotation.set(Math.sin(t * 0.7) * 0.05, Math.atan2(BOAT_TO.x - BOAT_FROM.x, BOAT_TO.z - BOAT_FROM.z), Math.sin(t * 0.9 + 1) * 0.06);
-  }
-  // 灯光在雾里慢慢撑开
+function toScreen(p, el) {
+  p.project(camera);
+  el.style.left = ((p.x + 1) / 2 * innerWidth) + 'px';
+  el.style.top = ((1 - p.y) / 2 * innerHeight) + 'px';
+}
+
+function updateLevel(t, dt) {
+  // 灯光在雾里慢慢撑开（0、1 号光）
   for (const L of lights) {
     const a = Math.min(1, (t - L.t0) / LIGHT_SEC), r = LIGHT_R * (1 - Math.pow(1 - a, 3));
     U.uLights.value[L.i].set(L.x, L.z, r, 0);
     if (L.i === 0 && revealAt !== null && r >= revealAt) {
       revealAt = null;
       for (const v of voxels) v.hidden = false;
+      isles[1].hidden = false;
+      isles[1].lamp.visible = isles[1].house.visible = isles[1].boat.visible = true;
       updateBounds();
       const b = ISLANDS[1].tower;
       addRipple(b.x, b.z, 0.2);
@@ -2294,24 +2347,51 @@ function updateLevel(t) {
       refresh();
     }
   }
-  // 开局的“点击鼠标左键”提示，贴在第一座塔顶上方
-  if (stage === 0 && hintEl.style.opacity !== '0') {
-    const tw = ISLANDS[0].tower, v = grid.get(key(tw.x, tw.top, tw.z));
-    if (v) {
-      const p = new THREE.Vector3(v.x, v.y + 1.6, v.z);
-      v.body.content.localToWorld(p);
-      p.project(camera);
-      hintEl.style.left = ((p.x + 1) / 2 * innerWidth) + 'px';
-      hintEl.style.top = ((1 - p.y) / 2 * innerHeight) + 'px';
-      hintEl.style.transform = 'translate(-50%, -100%)';
+  glows.length = 0;
+  isles.forEach((s, i) => {
+    if (!s.built) return;
+    const def = ISLANDS[i], tw = def.tower, top = grid.get(key(tw.x, columnTop(tw), tw.z));
+    // 灯：挂在塔顶方块所在的物块上，被顶起时平滑上升
+    if (top) {
+      if (s.lamp.parent !== top.body.content) top.body.content.add(s.lamp);
+      s.lampY += (lampCell(i) - s.lampY) * (1 - Math.exp(-dt * 10));
+      s.lamp.position.set(tw.x, s.lampY, tw.z);
+      if (!s.lit) glows.push({ kind: 'ember', x: tw.x, y: s.lampY, z: tw.z, body: top.body, hidden: s.hidden });
     }
+    // 房子：挂在脚下那块地所在的物块上
+    const hs = def.house, ground = grid.get(key(hs.x0, 0, hs.z0));
+    if (ground && s.house.parent !== ground.body.content) ground.body.content.add(s.house);
+    s.house.position.set(hs.x0 + (hs.w - 1) / 2, 0.5, hs.z0 + (hs.d - 1) / 2);
+    // 小船：等在远处的雾里（周围的雾散开一小片），灯塔亮后驶回港湾
+    const a = s.boatT0 < 0 ? 0 : Math.min(1, (t - s.boatT0) / BOAT_SEC), e = a * a * (3 - 2 * a), b = def.boat;
+    const x = b.from.x + (b.to.x - b.from.x) * e, z = b.from.z + (b.to.z - b.from.z) * e;
+    s.boat.position.set(x, 0.05 + Math.sin(t * 0.9 + i) * 0.06, z);
+    s.boat.rotation.set(Math.sin(t * 0.7 + i) * 0.05, Math.atan2(b.to.x - b.from.x, b.to.z - b.from.z), Math.sin(t * 0.9 + 1 + i) * 0.06);
+    U.uLights.value[4 + i].set(x, z, s.hidden ? -99 : BOAT_CLEAR, 0);
+    // 问号：灯塔亮之前一直闪
+    const showQ = !s.hidden && !s.lit && !uiState.title;
+    s.q.style.display = showQ ? 'block' : 'none';
+    if (showQ) toScreen(v3.set(x, 1.6, z), s.q);
+  });
+  // 开局的“点击鼠标左键”提示，贴在第一盏灯的上方
+  if (stage === 0 && hintEl.style.opacity !== '0' && isles.length && isles[0].built) {
+    isles[0].lamp.getWorldPosition(v3); v3.y += 1.1;
+    toScreen(v3, hintEl);
+    hintEl.style.transform = 'translate(-50%, -100%)';
   }
 }
 
+function clearIsles() {
+  for (const s of isles) { s.lamp.removeFromParent(); s.house.removeFromParent(); s.boat.removeFromParent(); s.q.remove(); }
+  isles = ISLANDS.map((def, i) => ({ i, built: false, hidden: true, lit: false, boatT0: -1, lampY: def.tower.top + 1,
+    lamp: makeLamp(), house: makeHouse(def.house), boat: makeBoat(), q: makeQuestion() }));
+  for (const s of isles) s.boat.visible = false;
+}
 function startLevel() {
-  stage = 0; lit = []; lights = []; revealAt = null; boatT0 = -1;
-  glows.length = 0; boat.visible = true;
+  stage = 0; lights = []; revealAt = null;
+  blocked.clear();
   for (const l of U.uLights.value) l.set(0, 0, -99, 0);
+  clearIsles();
   build(0, false);
   refresh();
   updateBounds();
@@ -2321,7 +2401,6 @@ function restartLevel() {
   resetAll();
   startLevel();
 }
-
 // 开场时雾最先散开的地方：第一座塔
 function focusPoint() { const tw = ISLANDS[0].tower; return { x: tw.x, z: tw.z }; }
 

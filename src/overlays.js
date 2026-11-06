@@ -17,7 +17,7 @@ function overlayMesh(geo, max, order) {
 const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
-// 塔顶的余烬：灰色微尘从塔顶慢慢飘起、摇摆、淡出（关卡往 glows 里放 { x, y, z, kind: 'ember' }）
+// 熄灭的灯的余烬：灰色微尘慢慢飘起、摇摆、淡出（关卡往 glows 里放 { x, y, z, body, kind: 'ember' }）
 const ASH_MAX = 80;
 const ashMesh = overlayMesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), ASH_MAX, 16);
 const glows = [], ash = [];
@@ -25,6 +25,13 @@ const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17
 const hintMesh = overlayMesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), 8, 13);
 const flashes = [], bubbles = [];
 const alive = v => grid.get(key(v.x, v.y, v.z)) === v;
+// 灯塔的顶：可能是一个方块，也可能是放在方块上的灯（那一格没有方块）→ 用下面那格 + 偏移
+function towerTop(tw) {
+  const v = grid.get(key(tw.x, tw.top, tw.z));
+  if (v) return { v, dy: 0 };
+  const u = grid.get(key(tw.x, tw.top - 1, tw.z));
+  return u ? { v: u, dy: 1 } : null;
+}
 
 function spawnBubble(r, speed) {
   if (bubbles.length >= BUB_MAX || !r.wall) return;
@@ -56,9 +63,9 @@ function updateOverlays(t, dt) {
   let mi = 0;
   const pulse = 0.09 + 0.05 * Math.sin(t * 2.2);
   for (const tw of features.towers.values()) {
-    const v = grid.get(key(tw.x, tw.top, tw.z));
-    if (!v || mi >= MARK_MAX) continue;
-    markMesh.setMatrixAt(mi, voxelMatrix(v, m4));
+    const tt = towerTop(tw);
+    if (!tt || mi >= MARK_MAX) continue;
+    markMesh.setMatrixAt(mi, voxelMatrix(tt.v, m4, tt.dy));
     markMesh.setColorAt(mi++, col.setRGB(pulse * 2.2, pulse * 1.7, pulse * 0.5));
   }
   for (const a of features.arches.values()) for (let i = 1; i < a.k && mi < MARK_MAX; i++) {
@@ -70,12 +77,11 @@ function updateOverlays(t, dt) {
   markMesh.count = mi;
   // 余烬粒子：每处每秒冒出约 3 粒
   for (const g of glows) {
-    const v = grid.get(key(g.x, g.y, g.z));
-    if (!v || v.hidden || g.kind !== 'ember') continue;
+    if (!g.body || !bodies.has(g.body) || g.hidden || g.kind !== 'ember') continue;   // 关卡给出灯所在的物块和格子
     g.acc = (g.acc || 0) + dt * 3;
     while (g.acc > 1 && ash.length < ASH_MAX) {
       g.acc -= 1;
-      ash.push({ body: v.body, x: g.x + (Math.random() - 0.5) * 0.5, y: g.y + 0.5, z: g.z + (Math.random() - 0.5) * 0.5,
+      ash.push({ body: g.body, x: g.x + (Math.random() - 0.5) * 0.3, y: g.y + 0.25, z: g.z + (Math.random() - 0.5) * 0.5,
         vy: 0.25 + Math.random() * 0.25, ph: Math.random() * 6.28, t0: t, life: 2.2 + Math.random() * 1.5 });
     }
   }
@@ -130,11 +136,11 @@ function updateOverlays(t, dt) {
     scene.add(m); beams.push(m);
   }
   beams.forEach((m, i) => {
-    const tw = list[i], v = tw && grid.get(key(tw.x, tw.top, tw.z));
-    m.visible = !!v;
-    if (!v) return;
+    const tt = list[i] && towerTop(list[i]);
+    m.visible = !!tt;
+    if (!tt) return;
     m5.makeRotationY(t * 0.9 + i * 1.7).multiply(m4.makeRotationZ(-0.08));
-    m.matrix.multiplyMatrices(voxelMatrix(v, m4, 0.1), m5);
+    m.matrix.multiplyMatrices(voxelMatrix(tt.v, m4, tt.dy + 0.1), m5);
   });
 }
 

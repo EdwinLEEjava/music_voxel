@@ -19,6 +19,7 @@ const key = (x, y, z) => x + ',' + y + ',' + z;
 const NB = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
 const S = (x, y, z) => grid.has(key(x, y, z));
 const bodies = new Set();
+const blocked = new Set();         // 不能放方块的格子（例如房子模型占着的地方），由关卡填写
 
 const FACES = [
   { n: [ 1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] }, { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0] },
@@ -147,7 +148,7 @@ function impulse(b, v) {
 // ================= 放置 / 拆除 =================
 const tmpW = new THREE.Vector3();
 function addVoxel(x, y, z, inst = null, opts = {}) {
-  if (S(x, y, z)) return null;
+  if (S(x, y, z) || (!opts.relic && blocked.has(key(x, y, z)))) return null;
   const touching = new Set();
   for (const [dx, dy, dz] of NB) { const n = grid.get(key(x + dx, y + dy, z + dz)); if (n) touching.add(n.body); }
   let b;
@@ -221,4 +222,4 @@ function noteStep(v) {
   return Math.max(0, Math.min(11, 5 + v.y + (((v.x + v.z) % 2 + 2) % 2) * 2));
 }
 
-export { voxels, grid, key, NB, S, bodies, FACES, CORNERS, AO_LEVEL, solidMat, growMat, boxGeo, createBody, destroyBody, updateCom, toWorld, tmpT, voxelMatrix, rebuildBody, mergeInto, splitBody, impulse, tmpW, addVoxel, removeVoxel, removeLast, resetAll, view, viewTarget, spanR, updateBounds, noteStep };
+export { blocked, voxels, grid, key, NB, S, bodies, FACES, CORNERS, AO_LEVEL, solidMat, growMat, boxGeo, createBody, destroyBody, updateCom, toWorld, tmpT, voxelMatrix, rebuildBody, mergeInto, splitBody, impulse, tmpW, addVoxel, removeVoxel, removeLast, resetAll, view, viewTarget, spanR, updateBounds, noteStep };

@@ -10,8 +10,8 @@ const U = {
   uFogTex: { value: null }, uFogO: { value: new THREE.Vector2() }, uFogS: { value: new THREE.Vector2(1, 1) },
   uFogNear: { value: 0.8 }, uFogFar: { value: 5.5 },
   uFogPush: { value: 0 },          // 结局：雾被推远的距离（格）
-  // 灯塔的光：每座点亮的灯塔在雾里撑开一个圆（x, z, 半径, 未用），最多 4 座
-  uLights: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 0, -99, 0)) },
+  // 雾里撑开的圆（x, z, 半径, 未用）：0、1 灯塔的光  3 开场  4、5 小船周围
+  uLights: { value: Array.from({ length: 6 }, () => new THREE.Vector4(0, 0, -99, 0)) },
   uFogCol: { value: new THREE.Color(0, 0, 0) },
   uProg: { value: 0 },
   uFinale: { value: 0 },           // 结局的高潮：月光、星光、方块一起亮起，之后停在一个略亮的“苏醒”状态
@@ -70,10 +70,10 @@ float waterH(vec2 p) { return waveBase(p) + ripples(p); }
 uniform sampler2D uFogTex;
 uniform vec2 uFogO, uFogS;
 uniform float uFogNear, uFogFar, uFogPush;
-uniform vec4 uLights[4];
+uniform vec4 uLights[6];
 float fogAmt(vec2 p) {
   float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 51.0;   // 存的是距离 ×5，最远 51 格
-  for (int i = 0; i < 4; i++) d = min(d, length(p - uLights[i].xy) - uLights[i].z);   // 灯塔驱散黑暗
+  for (int i = 0; i < 6; i++) d = min(d, length(p - uLights[i].xy) - uLights[i].z);   // 灯塔驱散黑暗
   // 域扭曲：先用一层慢噪声把采样位置“吹歪”，雾絮就会卷动、流动
   float t = uTime;
   vec2 q = p + vec2(vnoise(p * 0.18 + vec2(t * 0.11, 0.0)), vnoise(p * 0.18 + vec2(7.1, -t * 0.09))) * 3.0;
