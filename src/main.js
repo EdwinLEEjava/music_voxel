@@ -6,6 +6,7 @@ import { bodies, rebuildBody, spanR, tmpT, view, viewTarget, voxels } from './wo
 import { processQueue } from './notes.js';
 import './codex.js';
 import './menu.js';
+import './title.js';
 import { updateCompanion } from './companion.js';
 import { updateColorful } from './progress.js';
 import { m4, pos, q, sc, updateOverlays } from './overlays.js';
@@ -13,7 +14,9 @@ import { ghost, ghostEdges, lastPickDist, pan, pickCell, pointer, pointers, upda
 
 // ================= 主循环 =================
 const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
-let camDist = 8;
+let camDist = 8, introUntil = 0;
+// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）
+function startIntro() { camDist = 70; introUntil = clock.elapsedTime + 5; }
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -58,7 +61,7 @@ function frame() {
   updatePan(dt);
   view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
-  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
+  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 0.75 : 2.5)));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
 
@@ -88,4 +91,4 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
-export { euler, camDist, frame };
+export { startIntro, euler, camDist, frame };

@@ -81,6 +81,21 @@
   .set-foot { margin-top: 16px; color: rgba(255,255,255,.3); font-size: 12px; }
   #quit { background: #000; letter-spacing: .5em; font-size: 15px; cursor: pointer; z-index: 8; }
   .quit-sub { margin-top: 10px; font-size: 12px; letter-spacing: .2em; color: rgba(255,255,255,.35); }
+  /* ———— 开始页面：极简黑白 ———— */
+  #title {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: #000; color: #fff; z-index: 7; transition: opacity 1.4s;
+  }
+  #title.gone { opacity: 0; pointer-events: none; }
+  .title-name { font: 300 26px/1 system-ui, sans-serif; letter-spacing: .8em; margin: 0 0 44px .8em; }
+  .title-btn {
+    background: none; border: 0; color: rgba(255,255,255,.4); font: 13px/1.8 system-ui, sans-serif;
+    letter-spacing: .5em; padding: 4px 0 4px .5em; cursor: pointer; transition: color .3s;
+  }
+  .title-btn:hover { color: #fff; }
+  /* 开始前隐藏游戏界面，开场结束后淡入 */
+  #bar, #hud, #hint { transition: opacity 1.2s; }
+  body.title #bar, body.title #hud, body.title #hint { opacity: 0; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -171,7 +186,7 @@ function toast(text) {
 }
 const hintEl = document.getElementById('hint'), countEl = document.getElementById('count');
 // 界面是否打开（图鉴 / 设置）：打开时不响应游戏按键
-const uiState = { codex: false, settings: false, get open() { return this.codex || this.settings; } };
+const uiState = { title: true, codex: false, settings: false, get open() { return this.title || this.codex || this.settings; } };
 function updateHud() { countEl.textContent = voxels.length; }
 
 // ======================= src/water.js =======================
@@ -1588,12 +1603,13 @@ quitEl.id = 'quit';
 quitEl.innerHTML = '<div>已退出</div><div class="quit-sub">可以关闭这个页面 · 点击任意处回到游戏</div>';
 document.body.appendChild(quitEl);
 quitEl.addEventListener('pointerdown', () => quitEl.classList.remove('open'));
+function quitGame() { window.close(); quitEl.classList.add('open'); }
 
 panel.addEventListener('click', e => {
   const t = e.target.closest('[data-tab]'), d = e.target.closest('[data-do]');
   if (t) { tab = t.dataset.tab; renderSettings(); }
   else if (d && d.dataset.do === 'reset') location.reload();
-  else if (d && d.dataset.do === 'quit') { toggleSettings(false); window.close(); quitEl.classList.add('open'); }
+  else if (d && d.dataset.do === 'quit') { toggleSettings(false); quitGame(); }
   else if (e.target === panel) toggleSettings(false);
 });
 
@@ -1612,6 +1628,7 @@ bar.addEventListener('click', e => {
 });
 
 addEventListener('keydown', e => {
+  if (uiState.title) return;           // 开始页面时不响应
   const k = e.key.toLowerCase();
   if (k === 'escape') { if (uiState.codex) toggleCodex(false); else toggleSettings(); }
   else if (k === 'b' && !uiState.settings) toggleCodex();
@@ -1897,6 +1914,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
+  if (uiState.title) { down = null; return; }   // 开场演出期间不放置
   const click = pointers.size === 0 && down && !down.multi && !down.drag && e.type === 'pointerup'
     && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
   if (click && down.button === 2) {
@@ -1945,7 +1963,9 @@ addEventListener('resize', () => {
 // ======================= src/main.js =======================
 // ================= 主循环 =================
 const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
-let camDist = 8;
+let camDist = 8, introUntil = 0;
+// 开场：镜头从远处慢慢拉近（开场期间跟随得更慢）
+function startIntro() { camDist = 70; introUntil = clock.elapsedTime + 5; }
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
@@ -1990,7 +2010,7 @@ function frame() {
   updatePan(dt);
   view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
-  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
+  camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * (t < introUntil ? 0.75 : 2.5)));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
 
@@ -2019,6 +2039,48 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ======================= src/title.js =======================
+// ================= 开始页面 =================
+// 开始前：世界整个藏在雾里，只显示游戏名和两个文字按钮
+// 点“开始游戏”：页面淡出 → 镜头从远处拉近 → 中心出现第一个白色方块 → 雾从方块周围散开到平时的范围
+const GAME_NAME = '水中体素';
+const FOG_HIDDEN = -7;            // 雾推到负数：整片海都藏在雾里
+const FOG_OPEN_SEC = 3.5;         // 雾散开所用的时间
+
+document.body.classList.add('title');
+U.uFogPush.value = FOG_HIDDEN;
+const titleEl = document.createElement('div');
+titleEl.id = 'title';
+titleEl.innerHTML = `<div class="title-name">${GAME_NAME}</div>
+  <button class="title-btn" data-go="start">开始游戏</button>
+  <button class="title-btn" data-go="quit">退出游戏</button>`;
+document.body.appendChild(titleEl);
+
+let openT = -1;
+function fogOpen() {
+  const a = Math.min(1, (clock.elapsedTime - openT) / FOG_OPEN_SEC);
+  U.uFogPush.value = FOG_HIDDEN * (1 - a * a * (3 - 2 * a));   // 平滑地从“全雾”退到 0
+  if (a < 1) requestAnimationFrame(fogOpen);
+}
+
+function startGame() {
+  sfx.init();
+  titleEl.classList.add('gone');
+  startIntro();
+  setTimeout(() => {
+    addVoxel(0, 0, 0);                           // 第一个白色方块
+    openT = clock.elapsedTime; fogOpen();
+  }, 700);
+  setTimeout(() => { uiState.title = false; document.body.classList.remove('title'); titleEl.remove(); }, 3200);
+}
+
+titleEl.addEventListener('click', e => {
+  const b = e.target.closest('[data-go]');
+  if (!b || titleEl.classList.contains('gone')) return;
+  if (b.dataset.go === 'start') startGame();
+  else quitGame();
+});
 </script>
 </body>
 </html>

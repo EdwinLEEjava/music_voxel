@@ -70,12 +70,13 @@ quitEl.id = 'quit';
 quitEl.innerHTML = '<div>已退出</div><div class="quit-sub">可以关闭这个页面 · 点击任意处回到游戏</div>';
 document.body.appendChild(quitEl);
 quitEl.addEventListener('pointerdown', () => quitEl.classList.remove('open'));
+function quitGame() { window.close(); quitEl.classList.add('open'); }
 
 panel.addEventListener('click', e => {
   const t = e.target.closest('[data-tab]'), d = e.target.closest('[data-do]');
   if (t) { tab = t.dataset.tab; renderSettings(); }
   else if (d && d.dataset.do === 'reset') location.reload();
-  else if (d && d.dataset.do === 'quit') { toggleSettings(false); window.close(); quitEl.classList.add('open'); }
+  else if (d && d.dataset.do === 'quit') { toggleSettings(false); quitGame(); }
   else if (e.target === panel) toggleSettings(false);
 });
 
@@ -94,10 +95,11 @@ bar.addEventListener('click', e => {
 });
 
 addEventListener('keydown', e => {
+  if (uiState.title) return;           // 开始页面时不响应
   const k = e.key.toLowerCase();
   if (k === 'escape') { if (uiState.codex) toggleCodex(false); else toggleSettings(); }
   else if (k === 'b' && !uiState.settings) toggleCodex();
   else if (k === 'm') toggleSound();
 });
 
-export { toggleSettings, toggleSound };
+export { quitGame, toggleSettings, toggleSound };

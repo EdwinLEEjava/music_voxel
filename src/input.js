@@ -112,6 +112,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
+  if (uiState.title) { down = null; return; }   // 开场演出期间不放置
   const click = pointers.size === 0 && down && !down.multi && !down.drag && e.type === 'pointerup'
     && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
   if (click && down.button === 2) {
