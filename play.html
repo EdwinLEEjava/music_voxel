@@ -1180,6 +1180,29 @@ let colorful = 0;
 const BG_MONO = new THREE.Color(0x000000), BG_COLOR = new THREE.Color(0x06101f), bgNow = new THREE.Color();
 const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
 let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
+
+// ———— 视觉层：每发现一种建筑，世界多出一层新东西（颜色取自那种建筑的乐器） ————
+// 第 1 层：远方辉光。镜头俯视看不到真正的地平线，所以垫一张全屏背景，越靠画面上方（越远）越亮
+const layers = [];                 // 第 i 层 → { col, on(0~1 当前强度) }
+const skyMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false,
+  uniforms: { uBg: { value: new THREE.Color() }, uGlowCol: { value: new THREE.Color() }, uGlow: { value: 0 }, uTime: U.uTime },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = vec4(position.xy, 0.9999, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uBg, uGlowCol; uniform float uGlow, uTime;
+    varying vec2 vUv;
+    void main() {
+      float h = smoothstep(0.25, 1.0, vUv.y);
+      float breathe = 0.9 + 0.1 * sin(uTime * 0.4 + vUv.x * 2.0);
+      vec3 col = uBg + uGlowCol * uGlow * (h * h * 0.32 + h * 0.06) * breathe;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const sky = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), skyMat);
+sky.frustumCulled = false; sky.renderOrder = -100;
+scene.add(sky);
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
 function discover(type, x = viewTarget.x, z = viewTarget.z) {
   if (discovered.has(type)) return;
@@ -1192,6 +1215,7 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
   u.uBloomCol.value.copy(INST[TYPE_INST[type]].col);
   addRipple(x, z, 0.35);
+  layers.push({ col: INST[TYPE_INST[type]].col.clone(), on: 0 });
   setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
   setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
 }
@@ -1224,6 +1248,11 @@ function updateColorful(dt) {
   const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
   bgNow.lerpColors(BG_MONO, BG_COLOR, colPrev + (colorful - colPrev) * k);
   renderer.setClearColor(bgNow, 1);
+  for (let i = 0; i < layers.length; i++) layers[i].on = i < layers.length - 1 ? 1 : k;   // 最新一层跟着冲击波亮起
+  skyMat.uniforms.uBg.value.copy(bgNow);
+  const L1 = layers[0];
+  skyMat.uniforms.uGlow.value = L1 ? L1.on : 0;
+  if (L1) skyMat.uniforms.uGlowCol.value.copy(L1.col);
   scene.fog.color.copy(bgNow);
 }
 
