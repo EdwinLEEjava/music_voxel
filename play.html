@@ -63,6 +63,7 @@ const GROW_MAX = 64;
 const TOWER_MIN = 4;              // 灯塔最少格数
 // 各类建筑的门槛（调低一些，让玩家更早获得第一次发现）
 const NEED = { anchor: 4, anchorDepth: -3, bridge: 6, stair: 3 };
+const HINT_DELAY = 90;            // 多少秒没有发现新建筑，才开始给“差一点”提示（玩家还在探索时不打扰）
 const MILESTONES = [10, 25, 50, 100, 200, 400];   // 结构长到这些方块数时，海给一次回应
 const WAVE_SPEED = 2.2;            // 与涟漪扩散速度一致
 const ECHO_GAP = 0.3;              // 回响中相邻两个音的间隔
@@ -1321,6 +1322,12 @@ const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
 let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
 const order = [];                 // 发现顺序，结局按这个顺序奏响
 let finaleT = -1;
+let lastProgressT = -1;            // 上一次有进展（发现新建筑）的时间；放下第一个方块时开始计时
+// 玩家已经多久没有进展了（秒）
+function stuckFor(t) {
+  if (!voxels.length || lastProgressT < 0) { lastProgressT = voxels.length ? t : -1; return 0; }
+  return t - lastProgressT;
+}
 
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
 function discover(type, x = viewTarget.x, z = viewTarget.z) {
@@ -1328,6 +1335,7 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   colPrev = colorful;
   discovered.add(type);
   order.push(type);
+  lastProgressT = clock.elapsedTime;
   refreshCodex();
   colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
   bloomX = x; bloomZ = z; bloomT = U.uTime.value;
@@ -1613,11 +1621,13 @@ function updateOverlays(t, dt) {
   markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
 
   // “差一点”提示：空格子上一个很淡、缓慢呼吸的方块
+  // 只有长时间没有发现新建筑时才出现（HINT_DELAY 秒后用 5 秒淡入）
   let hi = 0;
-  for (const h of hints) {
+  const hintK = THREE.MathUtils.smoothstep(stuckFor(t), HINT_DELAY, HINT_DELAY + 5);
+  if (hintK > 0) for (const h of hints) {
     if (!bodies.has(h.body)) continue;
     hintMesh.setMatrixAt(hi, voxelMatrix(h, m4));
-    hintMesh.setColorAt(hi++, col.setScalar(0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z))));
+    hintMesh.setColorAt(hi++, col.setScalar(hintK * (0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z)))));
   }
   hintMesh.count = hi;
   hintMesh.instanceMatrix.needsUpdate = true; hintMesh.instanceColor.needsUpdate = true;

@@ -3,6 +3,8 @@ import { clock, scene } from './core.js';
 import { bodies, grid, key, tmpW, toWorld, voxelMatrix } from './world.js';
 import { panOf, sfx } from './audio.js';
 import { features, hints } from './features.js';
+import { stuckFor } from './progress.js';
+import { HINT_DELAY } from './config.js';
 
 // ================= 覆盖层：闪光 / 微光 / 气泡 / 灯塔光束（都跟随所在物块） =================
 function overlayMesh(geo, max, order) {
@@ -65,11 +67,13 @@ function updateOverlays(t, dt) {
   markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
 
   // “差一点”提示：空格子上一个很淡、缓慢呼吸的方块
+  // 只有长时间没有发现新建筑时才出现（HINT_DELAY 秒后用 5 秒淡入）
   let hi = 0;
-  for (const h of hints) {
+  const hintK = THREE.MathUtils.smoothstep(stuckFor(t), HINT_DELAY, HINT_DELAY + 5);
+  if (hintK > 0) for (const h of hints) {
     if (!bodies.has(h.body)) continue;
     hintMesh.setMatrixAt(hi, voxelMatrix(h, m4));
-    hintMesh.setColorAt(hi++, col.setScalar(0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z))));
+    hintMesh.setColorAt(hi++, col.setScalar(hintK * (0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z)))));
   }
   hintMesh.count = hi;
   hintMesh.instanceMatrix.needsUpdate = true; hintMesh.instanceColor.needsUpdate = true;

@@ -17,6 +17,12 @@ const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
 let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
 const order = [];                 // 发现顺序，结局按这个顺序奏响
 let finaleT = -1;
+let lastProgressT = -1;            // 上一次有进展（发现新建筑）的时间；放下第一个方块时开始计时
+// 玩家已经多久没有进展了（秒）
+function stuckFor(t) {
+  if (!voxels.length || lastProgressT < 0) { lastProgressT = voxels.length ? t : -1; return 0; }
+  return t - lastProgressT;
+}
 
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
 function discover(type, x = viewTarget.x, z = viewTarget.z) {
@@ -24,6 +30,7 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   colPrev = colorful;
   discovered.add(type);
   order.push(type);
+  lastProgressT = clock.elapsedTime;
   refreshCodex();
   colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
   bloomX = x; bloomZ = z; bloomT = U.uTime.value;
@@ -122,4 +129,4 @@ function updateColorful(dt) {
   U.uFogCol.value.copy(bgNow);
 }
 
-export { growthReward, discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };
+export { stuckFor, growthReward, discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };
