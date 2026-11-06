@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = p => readFileSync(join(root, p), 'utf8');
 
 // 模块顺序：被依赖、且在顶层就要用到的模块放前面
-const ORDER = ['config', 'core', 'ui', 'water', 'world', 'audio', 'notes', 'features', 'progress', 'codex', 'menu', 'companion', 'overlays', 'input', 'main', 'level', 'title'];
+const ORDER = ['config', 'core', 'ui', 'water', 'world', 'audio', 'notes', 'features', 'progress', 'codex', 'menu', 'hotbar', 'companion', 'overlays', 'input', 'main', 'level', 'title'];
 
 // 所有模块会合并进同一个作用域：顶层重名会让 play.html 直接报错，这里提前拦下
 {

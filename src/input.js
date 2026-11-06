@@ -5,7 +5,8 @@ import { hintEl, uiState } from './ui.js';
 import { NB, S, addVoxel, blocked, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { waterTap } from './notes.js';
-import { restartLevel } from './level.js';
+import { pickLamp, placeLamp, restartLevel } from './level.js';
+import { inv } from './hotbar.js';
 import { discover, discovered } from './progress.js';
 import { toast } from './ui.js';
 
@@ -117,11 +118,12 @@ function endPointer(e) {
   const click = pointers.size === 0 && down && !down.multi && !down.drag && e.type === 'pointerup'
     && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
   if (click && down.button === 2) {
-    const h = rayHit(e.clientX, e.clientY);
-    if (h) removeVoxel(h.v);
+    // 右键：先看是不是点中了一盏灯（收回），否则拆方块
+    setRay(e.clientX, e.clientY);
+    if (!pickLamp(raycaster)) { const h = rayHit(e.clientX, e.clientY); if (h) removeVoxel(h.v); }
   } else if (click) {
     const c = pickCell(e.clientX, e.clientY);
-    if (c && lastPickDist < TAP_FAR) addVoxel(c.x, c.y, c.z, c.from ? c.from.inst : null);
+    if (c && lastPickDist < TAP_FAR) { if (inv.sel === 'lamp') placeLamp(c); else addVoxel(c.x, c.y, c.z, c.from ? c.from.inst : null); }
     else if (voxels.length) { const wp = waterPoint(e.clientX, e.clientY); if (wp) waterTap(wp.x, wp.z); }
     hintEl.style.opacity = 0;
   }

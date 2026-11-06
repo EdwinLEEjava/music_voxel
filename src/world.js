@@ -190,6 +190,7 @@ function removeVoxel(v) {
   addRipple(tmpW.x, tmpW.z, 0.06);
   sfx.undo();
   updateFeatures(false); updateBounds(); updateHud();
+  onPlaced();                          // 灯可能失去支撑而落下
 }
 function removeLast() { const v = voxels.findLast(v => !v.relic); if (v) removeVoxel(v); }
 

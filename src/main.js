@@ -9,7 +9,8 @@ import './codex.js';
 import './menu.js';
 import './title.js';
 import { updateCompanion } from './companion.js';
-import { updateLevel } from './level.js';
+import { lampOK, previewLamp, updateLevel } from './level.js';
+import { inv } from './hotbar.js';
 import { updateColorful } from './progress.js';
 import { m4, pos, q, sc, updateOverlays } from './overlays.js';
 import { ghost, ghostEdges, lastPickDist, pan, pickCell, pointer, pointers, updatePan, zoom } from './input.js';
@@ -82,6 +83,10 @@ function frame() {
   else if (!n) target = { x: 0, y: 0, z: 0, from: null };
   else if (pointer.has && pointers.size === 0) target = pickCell(pointer.x, pointer.y);
   if (target && n && lastPickDist >= TAP_FAR) target = null;
+  // 拿着灯：只能放在方块顶面上；同时画出到等待中的船的视线
+  const holdingLamp = inv.sel === 'lamp' && inv.lamp > 0;
+  if (inv.sel === 'lamp' && !(holdingLamp && lampOK(target))) target = null;
+  previewLamp(holdingLamp ? target : null);
   if (target) {
     if (target.from) { ghost.matrix.multiplyMatrices(target.from.body.content.matrixWorld, tmpT.makeTranslation(target.x, target.y, target.z)); }
     else ghost.matrix.makeTranslation(0, 0, 0);

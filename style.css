@@ -95,3 +95,23 @@
   }
   @keyframes boat-q { 0%, 100% { opacity: .15; } 50% { opacity: .9; } }
   body.title .boat-q { display: none !important; }
+  /* ———— 物品栏：底部中间的六边形格子，按键在上 ———— */
+  #hotbar { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 6px; z-index: 6; }
+  .hot { background: none; border: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; color: rgba(255,255,255,.7); }
+  .hot-key { font: 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .6; }
+  .hot-hex {
+    width: 50px; height: 44px; display: flex; align-items: center; justify-content: center;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); background: rgba(255,255,255,.22); transition: background .2s;
+  }
+  .hot-in {
+    width: 48px; height: 42px; display: flex; align-items: center; justify-content: center;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); background: rgba(0,0,0,.82);
+  }
+  .hot-in svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .hot:hover { color: #fff; }
+  .hot.on { color: #fff; }
+  .hot.on .hot-hex { background: rgba(255,255,255,.9); }
+  .hot.empty .hot-in svg { opacity: .3; }
+  .hot-n { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .7; min-height: 11px; }
+  body.title #hotbar { opacity: 0; pointer-events: none; }
+  #hotbar { transition: opacity 1.2s; }
