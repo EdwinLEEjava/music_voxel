@@ -6,6 +6,10 @@ import { scene } from './core.js';
 const U = {
   uTime: { value: 0 },
   uWaterY: { value: WATER_Y },
+  // 雾：按到结构中心的水平距离计算（不受镜头缩放影响），水面和方块共用
+  uCenter: { value: new THREE.Vector2() },
+  uFogNear: { value: 4 }, uFogFar: { value: 10 },
+  uFogCol: { value: new THREE.Color(0, 0, 0) },
   uRip: { value: Array.from({ length: RIPPLE_N }, () => new THREE.Vector4(0, 0, -99, 0)) }, // x, z, 开始时间, 强度
 };
 let ripIdx = 0;
@@ -67,33 +71,7 @@ float caustic(vec2 p) {
 }
 `;
 
-// —— 调色板：已发现的建筑颜色（按发现顺序），以及每一层视觉的强度 ——
-const P = {
-  uPal: { value: Array.from({ length: 7 }, () => new THREE.Color()) },
-  uPalN: { value: 0 },
-  uPalAvg: { value: new THREE.Color() },
-  uLay: { value: [0, 0, 0, 0, 0, 0, 0] },   // 第 i 层的强度（0~1）
-  uNewest: { value: -1 },                    // 最新解锁的那一层：水面上只在冲击波扫过的地方出现
-};
-const PAL_GLSL = /* glsl */`
-uniform vec3 uPal[7];
-uniform float uPalN;
-uniform vec3 uPalAvg;
-uniform float uLay[7];
-uniform float uNewest;
-// 在调色板里循环取色：t 每增加 1 走完一轮，相邻颜色平滑过渡
-vec3 palAt(float t) {
-  float n = max(uPalN, 1.0), f = fract(t) * n, ws = 0.0;
-  vec3 c = vec3(0.0);
-  for (int i = 0; i < 7; i++) {
-    float fi = float(i);
-    if (fi >= n) break;
-    float d = abs(f - fi - 0.5); d = min(d, n - d);
-    float w = max(0.0, 1.0 - d);
-    c += uPal[i] * w; ws += w;
-  }
-  return c / max(ws, 1e-3);
-}
+const HASH_GLSL = /* glsl */`
 float hashP(vec2 p) { p = fract(p * vec2(234.34, 435.345)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
 `;
 
@@ -103,13 +81,10 @@ const waterMat = new THREE.ShaderMaterial({
   depthWrite: false,
   uniforms: {
     ...U,
-    ...P,
-    uFade: { value: 30 },
     uColorful: { value: 0 },
     uColPrev: { value: 0 },
     uBloom: { value: new THREE.Vector4(0, 0, -99, 0) },   // 色彩冲击波：x, z, 开始时间, 速度
-    uBloomCol: { value: new THREE.Color(1, 1, 1) },
-    uCenter: { value: new THREE.Vector2() },
+    uBloomCol: { value: new THREE.Color(0.85, 0.9, 1.0) },   // 冲击波光环：统一的月白色
     uGlint: { value: new THREE.Vector3(-0.55, 0.47, -0.69).normalize() },
   },
   // 低多边形：顶点在 GPU 上按波浪抬升；片元里用屏幕导数求“三角面”法线，
@@ -125,8 +100,7 @@ const waterMat = new THREE.ShaderMaterial({
     }`,
   fragmentShader: /* glsl */`
     ${WAVE_GLSL}
-    ${PAL_GLSL}
-    uniform float uFade;
+    ${HASH_GLSL}
     uniform vec3 uGlint;
     uniform vec3 uKey;
     uniform float uColorful;
@@ -134,6 +108,7 @@ const waterMat = new THREE.ShaderMaterial({
     uniform vec4 uBloom;
     uniform vec3 uBloomCol;
     uniform vec2 uCenter;
+    uniform float uFogNear, uFogFar;
     varying vec3 vWP;
     void main() {
       vec3 N = normalize(cross(dFdx(vWP), dFdy(vWP)));
@@ -151,35 +126,15 @@ const waterMat = new THREE.ShaderMaterial({
       vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), cf);
       vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), cf);
       vec3 col = mix(lo, hi, shade);
-      // 第 i 层的强度；最新一层只出现在冲击波已经扫过的地方
-      float inF = smoothstep(1.5, -1.5, bd);
-      float L[7];
-      for (int i = 0; i < 7; i++) L[i] = uLay[i] * (float(i) == uNewest ? inF : 1.0);
-      float pt = vnoise(vWP.xz * 0.05 + uTime * 0.01) * 0.5 + length(vWP.xz) * 0.015;   // 慢慢漂移的取色位置
-
-      // 第 2 层：海面主色调，染上已发现建筑的颜色
-      col += palAt(pt) * (0.018 + 0.05 * shade) * L[1];
 
       // 整面闪光：朝向“月光”的那些三角面整块亮起
       float s = max(dot(reflect(-uGlint, N), V), 0.0);
-      vec3 glintCol = mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful);
-      // 第 4 层：月光带上颜色
-      glintCol = mix(glintCol, normalize(palAt(pt + 0.5) + 0.15) * 1.5, L[3] * 0.75);
-      col += glintCol * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03);
+      col += mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03);
 
-      // 第 3 层：星光倒影，零星的三角面一闪一闪
+      // 星光倒影：零星的三角面一闪一闪，纯白；随世界被点亮而出现（冲击波扫过才有）
       vec2 sc = floor(vWP.xz * 2.5);
       float st = step(0.985, hashP(sc)) * pow(0.5 + 0.5 * sin(uTime * (1.5 + hashP(sc + 7.0) * 2.5) + hashP(sc + 3.0) * 6.28), 3.0);
-      col += mix(vec3(1.0), palAt(hashP(sc + 1.0)), 0.5) * st * 0.22 * L[2];
-
-      // 第 5 层：浪尖荧光（夜光藻）
-      float wh = waveBase(vWP.xz);
-      float crest = smoothstep(0.10, 0.24, wh) * (0.7 + 0.3 * sin(uTime * 0.8 + vWP.x * 0.3));
-      col += palAt(pt + vWP.z * 0.02) * crest * 0.10 * L[4];
-
-      // 第 6 层：涟漪带色，敲水和放置荡开的水波发出彩光
-      float rp = ripples(vWP.xz);
-      col += palAt(pt + rp * 2.0 + uTime * 0.05) * min(abs(rp) * 0.9, 0.25) * L[5];
+      col += vec3(st * 0.22 * min(1.0, cf * 1.6));
 
       float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
       col += fres * 0.05;
@@ -189,7 +144,7 @@ const waterMat = new THREE.ShaderMaterial({
         col += uBloomCol * ring * (0.28 + 0.25 * shade) * exp(-bAge * 0.35);
       }
 
-      float fade = 1.0 - smoothstep(uFade * 0.35, uFade, length(vWP.xz - uCenter));
+      float fade = 1.0 - smoothstep(uFogNear, uFogFar, length(vWP.xz - uCenter));
       gl_FragColor = vec4(col, (0.82 + fres * 0.15) * fade);
     }`,
 });
@@ -225,7 +180,7 @@ function makeUnderwater(material) {
         #endif
         vWP = (modelMatrix * wp4).xyz;`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\n' + WAVE_GLSL)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform vec2 uCenter;\nuniform float uFogNear, uFogFar;\nuniform vec3 uFogCol;\n' + WAVE_GLSL)
       .replace('#include <fog_fragment>', `
         float depth = (uWaterY + waterH(vWP.xz)) - vWP.y;
         if (depth > 0.0) {
@@ -234,8 +189,8 @@ function makeUnderwater(material) {
           gl_FragColor.rgb = gl_FragColor.rgb * (0.35 + 0.65 * k) + c * 0.45 * k;
         }
         gl_FragColor.rgb += (1.0 - smoothstep(0.0, 0.04, abs(depth))) * 0.45;
-        #include <fog_fragment>`);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogCol, smoothstep(uFogNear, uFogFar, length(vWP.xz - uCenter)));`);
   };
 }
 
-export { P, PAL_GLSL, U, ripIdx, addRipple, WAVE_GLSL, waterMat, waterGeo, water, makeUnderwater };
+export { U, ripIdx, addRipple, WAVE_GLSL, waterMat, waterGeo, water, makeUnderwater };

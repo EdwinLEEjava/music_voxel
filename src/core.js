@@ -8,7 +8,7 @@ renderer.setClearColor(0x000000, 1);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x000000, 20, 60);
+// 雾在 water.js 里按到结构中心的水平距离自己计算，不用 three 自带的雾
 
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 2000);
 const VIEW_DIR = new THREE.Vector3(1, 0.85, 1.25).normalize();   // 固定视角方向
