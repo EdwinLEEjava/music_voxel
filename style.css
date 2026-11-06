@@ -15,3 +15,20 @@
     color: rgba(255,255,255,.4); font: 13px/1.6 system-ui, sans-serif;
     pointer-events: none; transition: opacity 1.2s; text-align: center;
   }
+  #codex {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.72); color: rgba(255,255,255,.8); font: 13px/1.6 system-ui, sans-serif;
+    opacity: 0; pointer-events: none; transition: opacity .4s; z-index: 5;
+  }
+  #codex.open { opacity: 1; pointer-events: auto; }
+  .codex-title { letter-spacing: .4em; margin-bottom: 22px; color: rgba(255,255,255,.65); }
+  .codex-grid { display: grid; grid-template-columns: repeat(4, 112px); gap: 14px; }
+  .codex-card {
+    height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 10px 0 8px;
+  }
+  .codex-card.lit { border-color: rgba(255,255,255,.22); }
+  .codex-art { flex: 1; display: flex; align-items: center; }
+  .codex-name { letter-spacing: .3em; color: rgba(255,255,255,.35); }
+  .codex-card.lit .codex-name { color: rgba(255,255,255,.85); }
+  .codex-foot { margin-top: 20px; color: rgba(255,255,255,.3); font-size: 12px; }

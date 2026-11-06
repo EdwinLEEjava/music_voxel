@@ -63,6 +63,25 @@ function waterPoint(px, py) { setRay(px, py); return raycaster.ray.intersectPlan
 
 // ================= 输入 =================
 let zoom = 1;
+// ———— 平移视野：左键拖动 / WASD / 方向键；C 回到结构中心 ————
+const pan = new THREE.Vector3();                 // 视野中心相对结构中心的偏移
+const PITCH = VIEW_DIR.y;                        // 视线和水面夹角的正弦：纵向拖动要放大，才能跟手
+const fwd = new THREE.Vector3(-VIEW_DIR.x, 0, -VIEW_DIR.z).normalize();   // 屏幕“往上” = 世界里往远处
+const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+const held = new Set();
+function panBy(dxPx, dyPx) {
+  const s = 2 * camera.position.distanceTo(view) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / innerHeight;
+  const d = new THREE.Vector3().addScaledVector(right, -dxPx * s).addScaledVector(fwd, dyPx * s / PITCH);
+  pan.add(d); view.add(d);                      // 同时移动当前视野，拖动才跟手
+}
+function updatePan(dt) {
+  let x = 0, y = 0;
+  if (held.has('a') || held.has('arrowleft')) x -= 1;
+  if (held.has('d') || held.has('arrowright')) x += 1;
+  if (held.has('w') || held.has('arrowup')) y -= 1;
+  if (held.has('s') || held.has('arrowdown')) y += 1;
+  if (x || y) panBy(-x * 700 * dt, -y * 700 * dt);
+}
 const pointers = new Map();
 let down = null, pinchStart = 0, pinchZoom = 1;
 const canvas = renderer.domElement;
@@ -79,7 +98,13 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   pointer.x = e.clientX; pointer.y = e.clientY; pointer.has = e.pointerType === 'mouse';
+  const prev = pointers.get(e.pointerId);
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // 单指 / 左键按住拖动超过 10 像素 → 平移视野（不再算作点击）
+  if (prev && pointers.size === 1 && down && !down.multi && down.button === 0) {
+    if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 10) down.drag = true;
+    if (down.drag) panBy(e.clientX - prev.x, e.clientY - prev.y);
+  }
   if (pointers.size === 2 && pinchStart > 0) {
     const [a, b] = [...pointers.values()];
     zoom = THREE.MathUtils.clamp(pinchZoom * pinchStart / Math.hypot(a.x - b.x, a.y - b.y), ZMIN, ZMAX);
@@ -87,7 +112,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
-  const click = pointers.size === 0 && down && !down.multi && e.type === 'pointerup'
+  const click = pointers.size === 0 && down && !down.multi && !down.drag && e.type === 'pointerup'
     && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
   if (click && down.button === 2) {
     const h = rayHit(e.clientX, e.clientY);
@@ -106,8 +131,13 @@ canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { pointer.has = false; });
 canvas.addEventListener('wheel', e => { e.preventDefault(); zoom = THREE.MathUtils.clamp(zoom * Math.exp(e.deltaY * 0.0012), ZMIN, ZMAX); }, { passive: false });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
+addEventListener('blur', () => held.clear());
 addEventListener('keydown', e => {
   sfx.init();
+  held.add(e.key.toLowerCase());
+  if (e.key.startsWith('Arrow')) e.preventDefault();
+  if (e.key === 'c' || e.key === 'C') pan.set(0, 0, 0);
   if (e.key === 'z' || e.key === 'Z') removeLast();
   if (e.key === 'r' || e.key === 'R') resetAll();
   if (e.key === ' ' && voxels.length) {
@@ -127,4 +157,4 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-export { ghost, ghostEdges, raycaster, ndc, invM, pointer, lastPickDist, waterPlane, setRay, rayHit, pickCell, waterPoint, zoom, pointers, down, pinchStart, pinchZoom, canvas, endPointer };
+export { pan, updatePan, ghost, ghostEdges, raycaster, ndc, invM, pointer, lastPickDist, waterPlane, setRay, rayHit, pickCell, waterPoint, zoom, pointers, down, pinchStart, pinchZoom, canvas, endPointer };

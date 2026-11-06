@@ -36,7 +36,9 @@ voxel-water/
     ├── notes.js        发声队列：放置回响、敲水水波、防嘈杂限流
     ├── features.js     特殊建筑：识别规则、触发反应、建筑配色
     ├── progress.js     解锁进度：世界色彩变化、远处生成乐器组件
-    ├── overlays.js     视觉覆盖层：发声闪光、塔顶微光、泉的气泡、灯塔光束
+    ├── codex.js        图鉴：B 键打开，建筑剪影（未发现为暗色）
+    ├── companion.js    陪伴者：水面下游动的小鱼
+    ├── overlays.js     视觉覆盖层：发声闪光、塔顶微光、泉的气泡、灯塔光束、“差一点”提示
     ├── input.js        鼠标 / 触摸 / 键盘、射线拾取、放置预览
     ├── ui.js           提示文字（toast）、方块计数
     └── main.js         主循环：物块物理、相机跟随、每帧更新
@@ -47,6 +49,8 @@ voxel-water/
 | 想改的东西 | 文件 | 位置 |
 |---|---|---|
 | 回响节奏、水波速度、发声限流 | `config.js` | `ECHO_GAP` `WAVE_SPEED` `VOXEL_COOLDOWN` `NOTE_WINDOW*` |
+| 建筑门槛、成长奖励的方块数 | `config.js` | `TOWER_MIN` `NEED` `MILESTONES` |
+| 哪些建筑可以共用方块 | `features.js` | `COMPAT` |
 | 点多远算“敲水” | `config.js` | `TAP_FAR` |
 | 建筑颜色 | `config.js` | `PAL` |
 | 乐器颜色、名字、建筑对应哪件乐器 | `config.js` | `INST` `TYPE_INST` |
@@ -59,7 +63,9 @@ voxel-water/
 | 夜海与天空的颜色 | `water.js` / `progress.js` | `lo` `hi` / `BG_COLOR` |
 | 漂浮手感（扶正、阻尼、浮沉） | `main.js` | 主循环里每个物块的 spin / heave 计算 |
 | 相机距离、缩放范围 | `main.js` / `config.js` | `fit` / `ZMIN` `ZMAX` |
-| 操作按键 | `input.js` | `keydown` 监听 |
+| 操作按键、平移速度 | `input.js` | `keydown` 监听、`updatePan` |
+
+调试：按 **N** 解锁下一种建筑（连按 7 次看结局）。
 
 ## 新增一种特殊建筑
 

@@ -6,7 +6,10 @@ const WATER_Y = 0.15;
 const RIPPLE_N = 8;
 const WATER_SIZE = 240;
 const GROW_MAX = 64;
-const TOWER_MIN = 5;
+const TOWER_MIN = 4;              // 灯塔最少格数
+// 各类建筑的门槛（调低一些，让玩家更早获得第一次发现）
+const NEED = { anchor: 4, anchorDepth: -3, bridge: 6, stair: 3 };
+const MILESTONES = [10, 25, 50, 100, 200, 400];   // 结构长到这些方块数时，海给一次回应
 const WAVE_SPEED = 2.2;            // 与涟漪扩散速度一致
 const ECHO_GAP = 0.3;              // 回响中相邻两个音的间隔
 const VOXEL_COOLDOWN = 0.4;        // 同一方块两次发声的最短间隔
@@ -36,4 +39,4 @@ const SEED_SHAPES = [
   [[0,0,0],[1,0,0],[0,0,1]], [[0,0,0],[1,0,0],[0,1,0]], [[0,0,0],[0,0,1],[0,1,0],[0,1,1]], [[0,0,0],[1,0,0],[2,0,0]],
 ];
 
-export { WATER_Y, RIPPLE_N, WATER_SIZE, GROW_MAX, TOWER_MIN, WAVE_SPEED, ECHO_GAP, VOXEL_COOLDOWN, NOTE_WINDOW, NOTE_WINDOW_MAX, TAP_FAR, ZMIN, ZMAX, WHITE, PAL, INST, INST_TINT, TYPE_INST, SEED_SHAPES };
+export { NEED, MILESTONES, WATER_Y, RIPPLE_N, WATER_SIZE, GROW_MAX, TOWER_MIN, WAVE_SPEED, ECHO_GAP, VOXEL_COOLDOWN, NOTE_WINDOW, NOTE_WINDOW_MAX, TAP_FAR, ZMIN, ZMAX, WHITE, PAL, INST, INST_TINT, TYPE_INST, SEED_SHAPES };

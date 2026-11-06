@@ -23,12 +23,29 @@
     color: rgba(255,255,255,.4); font: 13px/1.6 system-ui, sans-serif;
     pointer-events: none; transition: opacity 1.2s; text-align: center;
   }
+  #codex {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.72); color: rgba(255,255,255,.8); font: 13px/1.6 system-ui, sans-serif;
+    opacity: 0; pointer-events: none; transition: opacity .4s; z-index: 5;
+  }
+  #codex.open { opacity: 1; pointer-events: auto; }
+  .codex-title { letter-spacing: .4em; margin-bottom: 22px; color: rgba(255,255,255,.65); }
+  .codex-grid { display: grid; grid-template-columns: repeat(4, 112px); gap: 14px; }
+  .codex-card {
+    height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 10px 0 8px;
+  }
+  .codex-card.lit { border-color: rgba(255,255,255,.22); }
+  .codex-art { flex: 1; display: flex; align-items: center; }
+  .codex-name { letter-spacing: .3em; color: rgba(255,255,255,.35); }
+  .codex-card.lit .codex-name { color: rgba(255,255,255,.85); }
+  .codex-foot { margin-top: 20px; color: rgba(255,255,255,.3); font-size: 12px; }
 </style>
 </head>
 <body>
 <div id="toast"></div>
 <div id="hint">左键放置 · 右键拆除 · 点远处水面让水波奏响结构 · 滚轮缩放</div>
-<div id="hud"><span id="count">0</span> 方块 · 右键 拆除 · Z 撤销 · R 重置 · 空格/点水面 播放 · M <span id="snd">声音开</span></div>
+<div id="hud"><span id="count">0</span> 方块 · 右键 拆除 · Z 撤销 · R 重置 · 空格/点水面 播放 · 拖动/WASD 移动 · C 回中心 · B 图鉴 · M <span id="snd">声音开</span></div>
 
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -43,7 +60,10 @@ const WATER_Y = 0.15;
 const RIPPLE_N = 8;
 const WATER_SIZE = 240;
 const GROW_MAX = 64;
-const TOWER_MIN = 5;
+const TOWER_MIN = 4;              // 灯塔最少格数
+// 各类建筑的门槛（调低一些，让玩家更早获得第一次发现）
+const NEED = { anchor: 4, anchorDepth: -3, bridge: 6, stair: 3 };
+const MILESTONES = [10, 25, 50, 100, 200, 400];   // 结构长到这些方块数时，海给一次回应
 const WAVE_SPEED = 2.2;            // 与涟漪扩散速度一致
 const ECHO_GAP = 0.3;              // 回响中相邻两个音的间隔
 const VOXEL_COOLDOWN = 0.4;        // 同一方块两次发声的最短间隔
@@ -512,9 +532,10 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     toWorld(v, tmpW);
     addRipple(tmpW.x, tmpW.z, 0.05 + 0.13 * Math.exp(-Math.abs(tmpW.y - WATER_Y) * 0.35));
     sfx.place(v, tmpW);
+    notice(tmpW.x, tmpW.z);
   }
   updateFeatures(!opts.silent);
-  if (!opts.silent) queueEcho(v);
+  if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
   updateBounds(); updateHud();
   return v;
 }
@@ -895,6 +916,7 @@ function waterTap(wx, wz) {
   lastTap = t0;
   for (const e of noteQueue) if (e.wave) e.vol *= 0.35;  // 新水波来了，旧水波剩下的音减弱
   addRipple(wx, wz, 0.22);
+  notice(wx, wz);
   sfx.tap(panOf(tmpW.set(wx, 0, wz)));
   const id = ++waveId;
   for (const v of voxels) {
@@ -953,16 +975,22 @@ function columnRuns() {
 // 灯塔：竖直 5 格以上且塔顶高出水面
 function detectTowers(runs) {
   const out = new Map();
-  for (const r of runs) if (r.h >= TOWER_MIN && relY(r.x, r.top, r.z) >= 2) {
+  for (const r of runs) if (r.h >= TOWER_MIN && relY(r.x, r.top, r.z) >= 1.5) {
     const k = r.x + ',' + r.z, o = out.get(k);
     if (!o || r.h > o.h) out.set(k, r);
   }
   return out;
 }
 // 深锚：水下竖直 5 格以上
+// 只看柱子在水下的那一段，所以一根贯穿水面的长柱可以同时是深锚（水下）和灯塔（整根）
 function detectAnchors(runs) {
   const out = new Map();
-  for (const r of runs) if (r.h >= 5 && relY(r.x, r.bottom, r.z) <= -4 && relY(r.x, r.top, r.z) <= 1) out.set(r.x + ',' + r.z + ':' + r.bottom, r);
+  for (const r of runs) {
+    let top = r.top;
+    while (top >= r.bottom && relY(r.x, top, r.z) > 1) top--;
+    const h = top - r.bottom + 1;
+    if (h >= NEED.anchor && relY(r.x, r.bottom, r.z) <= NEED.anchorDepth) out.set(r.x + ',' + r.z + ':' + r.bottom, { ...r, top, h });
+  }
   return out;
 }
 // 环：同层围合，洪水填充找被围住的空格
@@ -1025,13 +1053,14 @@ function detectArches() {
   return out;
 }
 // 长桥：同层直线 ≥8 格
-function detectBridges() {
+// free(x,y,z)：这一格能不能算进来（没被其他类别占用）；长桥可以从别的建筑上延伸出来
+function detectBridges(free = S) {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [0, 1]]) {
-    if (S(v.x - ax, v.y, v.z - az)) continue;
+    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y, v.z - az)) continue;
     let len = 1;
-    while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
-    if (len >= 8) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
+    while (free(v.x + ax * len, v.y, v.z + az * len)) len++;
+    if (len >= NEED.bridge) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
   }
   return out;
 }
@@ -1046,15 +1075,47 @@ function detectPlatforms() {
   return out;
 }
 // 阶梯：每级前进 1 格、升高 1 格，连续 ≥4 级
-function detectStairs() {
+function detectStairs(free = S) {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (S(v.x - ax, v.y - 1, v.z - az)) continue;
+    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y - 1, v.z - az)) continue;
     let n = 1;
-    while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
-    if (n >= 4) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
+    while (free(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+    if (n >= NEED.stair) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
   }
   return out;
+}
+
+// ———— “差一点”提示：还没发现的建筑，结构离它只差一两步时，标出下一格该放在哪里 ————
+let hints = [];                    // [{ x, y, z, body, w }]，w 越大越接近完成
+function detectHints(runs) {
+  const out = [], want = t => !discovered.has(t);
+  const push = (x, y, z, from, w) => { if (!S(x, y, z) && from) out.push({ x, y, z, body: from.body, w }); };
+  for (const r of runs) {
+    const top = grid.get(key(r.x, r.top, r.z)), bot = grid.get(key(r.x, r.bottom, r.z));
+    if (want('tower') && r.h >= TOWER_MIN - 2 && r.h < TOWER_MIN + 2 && relY(r.x, r.top, r.z) >= 0) push(r.x, r.top + 1, r.z, top, r.h / TOWER_MIN);
+    if (want('anchor') && r.h >= NEED.anchor - 2 && relY(r.x, r.bottom, r.z) <= 0) push(r.x, r.bottom - 1, r.z, bot, r.h / NEED.anchor);
+  }
+  for (const v of voxels) {
+    if (want('bridge')) for (const [ax, az] of [[1, 0], [0, 1]]) {
+      if (S(v.x - ax, v.y, v.z - az)) continue;
+      let len = 1; while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
+      if (len >= NEED.bridge - 2 && len < NEED.bridge) push(v.x + ax * len, v.y, v.z + az * len, grid.get(key(v.x + ax * (len - 1), v.y, v.z + az * (len - 1))), len / NEED.bridge);
+    }
+    if (want('stair')) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (S(v.x - ax, v.y - 1, v.z - az)) continue;
+      let n = 1; while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+      if (n === NEED.stair - 1) push(v.x + ax * n, v.y + n, v.z + az * n, grid.get(key(v.x + ax * (n - 1), v.y + n - 1, v.z + az * (n - 1))), 0.7);
+    }
+    if (want('platform')) {
+      let filled = 0, miss = null;
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { if (S(v.x + i, v.y, v.z + j)) filled++; else if (!miss) miss = [v.x + i, v.z + j]; }
+      if (filled >= 7 && filled < 9 && miss) push(miss[0], v.y, miss[1], v, filled / 9);
+    }
+  }
+  // 去重、按接近程度排序，最多提示 4 处，避免满屏都是
+  const seen = new Set();
+  return out.sort((a, b) => b.w - a.w).filter(h => { const k = key(h.x, h.y, h.z); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 4);
 }
 
 function flashCell(x, y, z, delay = 0) { const v = grid.get(key(x, y, z)); if (v) flashes.push({ v, t0: clock.elapsedTime + delay }); }
@@ -1124,13 +1185,13 @@ function applyColors() {
     paint(a.x + a.ax * m, a.y + 1, a.z + a.az * m, PAL.keystone);
   }
   for (const st of features.stairs.values()) for (let i = 0; i < st.n; i++) paint(st.x + st.ax * i, st.y + i, st.z + st.az * i, PAL.stair);
-  for (const an of features.anchors.values()) {
-    for (let y = an.bottom; y <= an.top; y++) paint(an.x, y, an.z, PAL.anchor);
-    paint(an.x, an.bottom, an.z, PAL.anchorTip);
-  }
   for (const tw of features.towers.values()) {
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
+  }
+  for (const an of features.anchors.values()) {
+    for (let y = an.bottom; y <= an.top; y++) paint(an.x, y, an.z, PAL.anchor);
+    paint(an.x, an.bottom, an.z, PAL.anchorTip);
   }
   // 乐器方块：不属于建筑时用乐器颜色；属于建筑时以建筑配色为主、混入一点乐器颜色
   for (const v of voxels) {
@@ -1152,7 +1213,10 @@ function blend(building, inst) {
 // 不能再算进其他类别。建筑在它的方块全部存在时一直保留归属，拆掉其中任意一块才会释放。
 const PRIORITY = ['anchor', 'tower', 'arch', 'ring', 'stair', 'bridge', 'platform'];   // 同一次放置同时成立时，先到先得的顺序
 const PLURAL = { tower: 'towers', ring: 'rings', arch: 'arches', bridge: 'bridges', platform: 'platforms', anchor: 'anchors', stair: 'stairs' };
-const instances = new Map();   // "类型|key" -> { type, fk, data, cells: [格子key] }
+const instances = new Map();
+// 可以共用方块的类别组合（例如灯塔立在拱门的柱子上、长柱水下是深锚水上是灯塔）
+const COMPAT = { tower: ['arch', 'anchor'], arch: ['tower'], anchor: ['tower'] };
+const ok = (type, owners) => !owners || [...owners].every(o => o === type || (COMPAT[type] || []).includes(o));   // "类型|key" -> { type, fk, data, cells: [格子key] }
 
 // 每种建筑占用了哪些方块
 function cellsOf(type, d) {
@@ -1176,12 +1240,13 @@ function cellsOf(type, d) {
 
 function updateFeatures(allowFx) {
   const runs = columnRuns();
-  const C = { ring: detectRings(), arch: detectArches(), bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
+  const C = { ring: detectRings(), arch: detectArches(), platform: detectPlatforms() };
   // 1) 方块被拆掉的建筑失效，释放归属
   for (const [id, ins] of instances) if (ins.cells.some(c => !grid.has(c))) instances.delete(id);
   const claim = new Map();
-  for (const ins of instances.values()) for (const c of ins.cells) claim.set(c, ins.type);
-  const allowed = (type, cells) => cells.every(c => { const o = claim.get(c); return !o || o === type; });
+  const own = (c, type) => { if (!claim.has(c)) claim.set(c, new Set()); claim.get(c).add(type); };
+  for (const ins of instances.values()) for (const c of ins.cells) own(c, ins.type);
+  const allowed = (type, cells) => cells.every(c => ok(type, claim.get(c)));
 
   // 2) 按优先级接纳本次识别到的建筑；占用了其他类别方块的候选直接忽略
   const fresh = [], detected = new Set();
@@ -1191,15 +1256,17 @@ function updateFeatures(allowFx) {
     for (const r of runs) {
       let start = null;
       for (let y = r.bottom; y <= r.top + 1; y++) {
-        const o = y <= r.top ? claim.get(key(r.x, y, r.z)) : 'END';
-        const free = !o || o === type;
+        const free = y <= r.top && ok(type, claim.get(key(r.x, y, r.z)));
         if (free && start === null) start = y;
         if (!free && start !== null) { out.push({ x: r.x, z: r.z, bottom: start, top: y - 1, h: y - start }); start = null; }
       }
     }
     return out;
   };
-  for (const type of PRIORITY) for (const [fk, data] of (type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor')) : C[type])) {
+  const freeFor = type => (x, y, z) => S(x, y, z) && ok(type, claim.get(key(x, y, z)));
+  const detect = type => type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor'))
+    : type === 'bridge' ? detectBridges(freeFor('bridge')) : type === 'stair' ? detectStairs(freeFor('stair')) : C[type];
+  for (const type of PRIORITY) for (const [fk, data] of detect(type)) {
     const id = type + '|' + fk, cells = cellsOf(type, data);
     if (!cells.length || !allowed(type, cells)) continue;
     detected.add(id);
@@ -1212,7 +1279,7 @@ function updateFeatures(allowFx) {
       const ins = { type, fk, data, cells };
       instances.set(id, ins); fresh.push(ins);
     }
-    for (const c of cells) claim.set(c, type);
+    for (const c of cells) own(c, type);
   }
   // 3) 没再被识别到、但被同类新建筑覆盖的旧建筑（如环被扩大、长桥向前延伸）移除
   for (const [id, ins] of instances) {
@@ -1236,6 +1303,7 @@ function updateFeatures(allowFx) {
   for (const t of PRIORITY) F[PLURAL[t]] = new Map();
   for (const ins of instances.values()) F[PLURAL[ins.type]].set(ins.fk, ins.data);
   features = F;
+  hints = detectHints(runs);
   applyColors();
   for (const b of bodies) b.dirty = true;
   echoCols = new Set();
@@ -1260,6 +1328,7 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   colPrev = colorful;
   discovered.add(type);
   order.push(type);
+  refreshCodex();
   colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
   bloomX = x; bloomZ = z; bloomT = U.uTime.value;
   const u = waterMat.uniforms;
@@ -1308,6 +1377,19 @@ function finaleLevel(t) {
   return a < 1.5 ? a / 1.5 : 0.35 + 0.65 * Math.exp(-(a - 1.5) / 2.5);
 }
 
+// ———— 随便搭也有回应：结构长到某个方块数时，海轻轻回应一次 ————
+let nextMilestone = 0;
+function growthReward(n) {
+  if (nextMilestone >= MILESTONES.length || n < MILESTONES[nextMilestone]) return;
+  nextMilestone++;
+  const cx = viewTarget.x, cz = viewTarget.z, now = clock.elapsedTime;
+  setTimeout(() => {
+    addRipple(cx, cz, 0.22);
+    sfx.chord(0);
+    for (const v of voxels) flashes.push({ v, t0: clock.elapsedTime + Math.hypot(v.x - cx, v.z - cz) / 6 });
+  }, 700);
+}
+
 // 在虚空中找一块空地，生成一个小小的乐器组件
 function spawnSeed(inst) {
   if (!voxels.length) return;
@@ -1344,6 +1426,131 @@ function updateColorful(dt) {
   U.uFogCol.value.copy(bgNow);
 }
 
+// ======================= src/codex.js =======================
+// ================= 图鉴：按 B 打开 / 关闭 =================
+// 每种建筑一个像素剪影：没发现时是暗色剪影，发现后换成这种建筑的配色
+// 剪影用字符画：每个字符一格；'.' 空、'~' 水面线，其余字母对应下面的颜色
+const ENTRIES = [
+  { type: 'tower', name: '灯塔', art: ['..L..', '..r..', '..w..', '..r..', '~~w~~', '..r..'] },
+  { type: 'ring', name: '环', art: ['.....', '.ccc.', '.c.c.', '.ccc.', '.....'] },
+  { type: 'arch', name: '拱门', art: ['bbkbb', 's...s', 's...s', 's...s'] },
+  { type: 'bridge', name: '长桥', art: ['.......', '.......', 'ggggggg', '.......'] },
+  { type: 'platform', name: '浮台', art: ['.....', '.ppp.', '.ppp.', '.ppp.', '.....'] },
+  { type: 'anchor', name: '深锚', art: ['..a..', '~~a~~', '..a..', '..a..', '..a..', '..t..'] },
+  { type: 'stair', name: '阶梯', art: ['...h', '..hh', '.hhh', 'hhhh'] },
+];
+const COLS = {
+  L: PAL.lamp, r: PAL.towerRed, w: PAL.towerWhite, c: PAL.ring, b: PAL.archBeam, k: PAL.keystone, s: PAL.archStone,
+  g: PAL.bridge, p: PAL.platform, a: PAL.anchor, t: PAL.anchorTip, h: PAL.stair,
+};
+const DARK = '#2a2d33', WATER = 'rgba(120,160,190,.35)';
+
+const el = document.createElement('div');
+el.id = 'codex';
+document.body.appendChild(el);
+
+function svgOf(art, lit) {
+  const W = Math.max(...art.map(r => r.length)), H = art.length, S = 10;
+  let s = `<svg viewBox="-2 -2 ${W * S + 4} ${H * S + 4}" width="${W * S + 4}" height="${H * S + 4}">`;
+  art.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === '.') return;
+    if (ch === '~') { s += `<rect x="${x * S}" y="${y * S + S / 2 - 1}" width="${S}" height="2" fill="${WATER}"/>`; return; }
+    const fill = lit ? '#' + COLS[ch].getHexString() : DARK;
+    s += `<rect x="${x * S + 0.5}" y="${y * S + 0.5}" width="${S - 1}" height="${S - 1}" rx="1" fill="${fill}"/>`;
+  }));
+  // 水面线画在方块上层，表示“这一格在水面上”
+  art.forEach((row, y) => { if (row.includes('~')) s += `<rect x="0" y="${y * S + S / 2 - 1}" width="${W * S}" height="2" fill="${WATER}"/>`; });
+  return s + '</svg>';
+}
+
+function render() {
+  el.innerHTML = `<div class="codex-title">图鉴 · ${discovered.size}/${ENTRIES.length}</div><div class="codex-grid">` +
+    ENTRIES.map(e => {
+      const lit = discovered.has(e.type);
+      return `<div class="codex-card${lit ? ' lit' : ''}"><div class="codex-art">${svgOf(e.art, lit)}</div><div class="codex-name">${e.name}</div></div>`;
+    }).join('') + '</div><div class="codex-foot">B 关闭</div>';
+}
+
+let open = false;
+function toggleCodex(force) {
+  open = force ?? !open;
+  if (open) render();
+  el.classList.toggle('open', open);
+}
+// 发现新建筑时，如果图鉴开着就刷新
+function refreshCodex() { if (open) render(); }
+
+addEventListener('keydown', e => {
+  if (e.key === 'b' || e.key === 'B') toggleCodex();
+  if (e.key === 'Escape' && open) toggleCodex(false);
+});
+
+// ======================= src/companion.js =======================
+// ================= 陪伴者：一条在水面下游动的小鱼 =================
+// 平时绕着结构慢慢转圈；玩家放置方块或敲水时游过去看看，到了冒个泡，再回去转圈
+const mat = new THREE.MeshStandardMaterial({ color: 0xf2f4f8, emissive: 0x6a7c90, emissiveIntensity: 0.5, roughness: 0.5 });
+makeUnderwater(mat);
+const fish = new THREE.Group();
+const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.22), mat);
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.15, 0.17), mat);
+head.position.x = 0.3;
+const tailPivot = new THREE.Group();
+tailPivot.position.x = -0.25;
+const tail = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.04), mat);
+tail.position.x = -0.1;
+tailPivot.add(tail);
+fish.add(body, head, tailPivot);
+fish.scale.setScalar(0.85);
+fish.renderOrder = 5;          // 先于水面绘制，看起来在水下
+fish.visible = false;
+scene.add(fish);
+
+const pos = new THREE.Vector3(3, WATER_Y - 0.4, 3), vel = new THREE.Vector3();
+let heading = 0, orbitA = 0, visit = null, visitUntil = 0, greeted = true;
+const SPEED = 1.1, VISIT_SPEED = 2.4;
+
+// 玩家在 (x, z) 有动作：游过去看看
+function notice(x, z) {
+  visit = new THREE.Vector3(x, 0, z);
+  visitUntil = clock.elapsedTime + 5;
+  greeted = false;
+}
+
+function updateCompanion(t, dt) {
+  if (!voxels.length) { fish.visible = false; return; }
+  if (!fish.visible) { pos.set(viewTarget.x + spanR + 3, WATER_Y - 0.4, viewTarget.z); fish.visible = true; }
+
+  // 目标：要么是玩家刚动过的地方，要么是绕结构的圆上一点
+  let target, speed;
+  if (visit && t < visitUntil) { target = visit; speed = VISIT_SPEED; }
+  else {
+    visit = null;
+    orbitA += dt * 0.18;
+    const r = spanR + 2.5 + Math.sin(t * 0.3) * 0.8;
+    target = new THREE.Vector3(viewTarget.x + Math.cos(orbitA) * r, 0, viewTarget.z + Math.sin(orbitA) * r);
+    speed = SPEED;
+  }
+  const to = new THREE.Vector3(target.x - pos.x, 0, target.z - pos.z), dist = to.length();
+  // 到了玩家放置的地方：冒个泡、轻响一声，然后回去转圈
+  if (visit && dist < 0.9 && !greeted) {
+    greeted = true; visitUntil = t + 1.2;
+    addRipple(pos.x, pos.z, 0.06);
+    sfx.tiny(panOf(pos));
+  }
+  const want = dist > 0.05 ? Math.atan2(-to.z, to.x) : heading;
+  let dh = want - heading;
+  dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+  heading += dh * Math.min(1, dt * 3);
+  const v = speed * Math.min(1, dist / 1.5);
+  vel.set(Math.cos(heading) * v, 0, -Math.sin(heading) * v);
+  pos.addScaledVector(vel, dt);
+  pos.y = WATER_Y - 0.4 + Math.sin(t * 1.3) * 0.08;
+
+  fish.position.copy(pos);
+  fish.rotation.set(0, heading, Math.sin(t * 1.3) * 0.08);
+  tailPivot.rotation.y = Math.sin(t * (6 + v * 4)) * 0.5;   // 游得越快，尾巴摆得越快
+}
+
 // ======================= src/overlays.js =======================
 // ================= 覆盖层：闪光 / 微光 / 气泡 / 灯塔光束（都跟随所在物块） =================
 function overlayMesh(geo, max, order) {
@@ -1357,6 +1564,7 @@ const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
 const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);
+const hintMesh = overlayMesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), 8, 13);
 const flashes = [], bubbles = [];
 const alive = v => grid.get(key(v.x, v.y, v.z)) === v;
 
@@ -1403,6 +1611,16 @@ function updateOverlays(t, dt) {
   }
   markMesh.count = mi;
   markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
+
+  // “差一点”提示：空格子上一个很淡、缓慢呼吸的方块
+  let hi = 0;
+  for (const h of hints) {
+    if (!bodies.has(h.body)) continue;
+    hintMesh.setMatrixAt(hi, voxelMatrix(h, m4));
+    hintMesh.setColorAt(hi++, col.setScalar(0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z))));
+  }
+  hintMesh.count = hi;
+  hintMesh.instanceMatrix.needsUpdate = true; hintMesh.instanceColor.needsUpdate = true;
 
   // 泉：持续冒泡 + 零星气泡声
   for (const r of features.rings.values()) {
@@ -1495,6 +1713,25 @@ function waterPoint(px, py) { setRay(px, py); return raycaster.ray.intersectPlan
 
 // ================= 输入 =================
 let zoom = 1;
+// ———— 平移视野：左键拖动 / WASD / 方向键；C 回到结构中心 ————
+const pan = new THREE.Vector3();                 // 视野中心相对结构中心的偏移
+const PITCH = VIEW_DIR.y;                        // 视线和水面夹角的正弦：纵向拖动要放大，才能跟手
+const fwd = new THREE.Vector3(-VIEW_DIR.x, 0, -VIEW_DIR.z).normalize();   // 屏幕“往上” = 世界里往远处
+const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+const held = new Set();
+function panBy(dxPx, dyPx) {
+  const s = 2 * camera.position.distanceTo(view) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / innerHeight;
+  const d = new THREE.Vector3().addScaledVector(right, -dxPx * s).addScaledVector(fwd, dyPx * s / PITCH);
+  pan.add(d); view.add(d);                      // 同时移动当前视野，拖动才跟手
+}
+function updatePan(dt) {
+  let x = 0, y = 0;
+  if (held.has('a') || held.has('arrowleft')) x -= 1;
+  if (held.has('d') || held.has('arrowright')) x += 1;
+  if (held.has('w') || held.has('arrowup')) y -= 1;
+  if (held.has('s') || held.has('arrowdown')) y += 1;
+  if (x || y) panBy(-x * 700 * dt, -y * 700 * dt);
+}
 const pointers = new Map();
 let down = null, pinchStart = 0, pinchZoom = 1;
 const canvas = renderer.domElement;
@@ -1511,7 +1748,13 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   pointer.x = e.clientX; pointer.y = e.clientY; pointer.has = e.pointerType === 'mouse';
+  const prev = pointers.get(e.pointerId);
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // 单指 / 左键按住拖动超过 10 像素 → 平移视野（不再算作点击）
+  if (prev && pointers.size === 1 && down && !down.multi && down.button === 0) {
+    if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 10) down.drag = true;
+    if (down.drag) panBy(e.clientX - prev.x, e.clientY - prev.y);
+  }
   if (pointers.size === 2 && pinchStart > 0) {
     const [a, b] = [...pointers.values()];
     zoom = THREE.MathUtils.clamp(pinchZoom * pinchStart / Math.hypot(a.x - b.x, a.y - b.y), ZMIN, ZMAX);
@@ -1519,7 +1762,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
-  const click = pointers.size === 0 && down && !down.multi && e.type === 'pointerup'
+  const click = pointers.size === 0 && down && !down.multi && !down.drag && e.type === 'pointerup'
     && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 600;
   if (click && down.button === 2) {
     const h = rayHit(e.clientX, e.clientY);
@@ -1538,8 +1781,13 @@ canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { pointer.has = false; });
 canvas.addEventListener('wheel', e => { e.preventDefault(); zoom = THREE.MathUtils.clamp(zoom * Math.exp(e.deltaY * 0.0012), ZMIN, ZMAX); }, { passive: false });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
+addEventListener('blur', () => held.clear());
 addEventListener('keydown', e => {
   sfx.init();
+  held.add(e.key.toLowerCase());
+  if (e.key.startsWith('Arrow')) e.preventDefault();
+  if (e.key === 'c' || e.key === 'C') pan.set(0, 0, 0);
   if (e.key === 'z' || e.key === 'Z') removeLast();
   if (e.key === 'r' || e.key === 'R') resetAll();
   if (e.key === ' ' && voxels.length) {
@@ -1561,7 +1809,7 @@ addEventListener('resize', () => {
 
 // ======================= src/main.js =======================
 // ================= 主循环 =================
-const euler = new THREE.Euler();
+const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
 let camDist = 8;
 
 function frame() {
@@ -1604,7 +1852,8 @@ function frame() {
   }
 
   // 相机：方向固定，跟随所有物块的中心，距离随范围变大
-  view.lerp(viewTarget, 1 - Math.exp(-dt * 1.5));
+  updatePan(dt);
+  view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
   camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
@@ -1613,6 +1862,7 @@ function frame() {
   scene.updateMatrixWorld();
   processQueue(t);
   updateOverlays(t, dt);
+  updateCompanion(t, dt);
   updateColorful(dt);
 
   // 悬停预览

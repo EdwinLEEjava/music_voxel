@@ -7,6 +7,8 @@ import { sfx } from './audio.js';
 import { noteQueue, queueEcho } from './notes.js';
 import { resetFeatures, updateFeatures } from './features.js';
 import { bubbles, flashes } from './overlays.js';
+import { growthReward } from './progress.js';
+import { notice } from './companion.js';
 
 // ================= 数据 =================
 // 所有方块共用一套整数格子坐标；每个“物块”(body) 是一组相连的方块，作为独立刚体漂浮
@@ -159,9 +161,10 @@ function addVoxel(x, y, z, inst = null, opts = {}) {
     toWorld(v, tmpW);
     addRipple(tmpW.x, tmpW.z, 0.05 + 0.13 * Math.exp(-Math.abs(tmpW.y - WATER_Y) * 0.35));
     sfx.place(v, tmpW);
+    notice(tmpW.x, tmpW.z);
   }
   updateFeatures(!opts.silent);
-  if (!opts.silent) queueEcho(v);
+  if (!opts.silent) { queueEcho(v); growthReward(voxels.length); }
   updateBounds(); updateHud();
   return v;
 }

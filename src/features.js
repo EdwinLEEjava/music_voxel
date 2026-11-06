@@ -1,10 +1,10 @@
-import { INST, INST_TINT, PAL, TOWER_MIN } from './config.js';
+import { INST, INST_TINT, NEED, PAL, TOWER_MIN } from './config.js';
 import { clock } from './core.js';
 import { toast } from './ui.js';
 import { addRipple } from './water.js';
 import { S, bodies, grid, key, tmpW, toWorld, voxels } from './world.js';
 import { panOf, sfx } from './audio.js';
-import { discover } from './progress.js';
+import { discover, discovered } from './progress.js';
 import { flashes, spawnBubble } from './overlays.js';
 
 // ================= 特殊建筑 =================
@@ -31,16 +31,22 @@ function columnRuns() {
 // 灯塔：竖直 5 格以上且塔顶高出水面
 function detectTowers(runs) {
   const out = new Map();
-  for (const r of runs) if (r.h >= TOWER_MIN && relY(r.x, r.top, r.z) >= 2) {
+  for (const r of runs) if (r.h >= TOWER_MIN && relY(r.x, r.top, r.z) >= 1.5) {
     const k = r.x + ',' + r.z, o = out.get(k);
     if (!o || r.h > o.h) out.set(k, r);
   }
   return out;
 }
 // 深锚：水下竖直 5 格以上
+// 只看柱子在水下的那一段，所以一根贯穿水面的长柱可以同时是深锚（水下）和灯塔（整根）
 function detectAnchors(runs) {
   const out = new Map();
-  for (const r of runs) if (r.h >= 5 && relY(r.x, r.bottom, r.z) <= -4 && relY(r.x, r.top, r.z) <= 1) out.set(r.x + ',' + r.z + ':' + r.bottom, r);
+  for (const r of runs) {
+    let top = r.top;
+    while (top >= r.bottom && relY(r.x, top, r.z) > 1) top--;
+    const h = top - r.bottom + 1;
+    if (h >= NEED.anchor && relY(r.x, r.bottom, r.z) <= NEED.anchorDepth) out.set(r.x + ',' + r.z + ':' + r.bottom, { ...r, top, h });
+  }
   return out;
 }
 // 环：同层围合，洪水填充找被围住的空格
@@ -103,13 +109,14 @@ function detectArches() {
   return out;
 }
 // 长桥：同层直线 ≥8 格
-function detectBridges() {
+// free(x,y,z)：这一格能不能算进来（没被其他类别占用）；长桥可以从别的建筑上延伸出来
+function detectBridges(free = S) {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [0, 1]]) {
-    if (S(v.x - ax, v.y, v.z - az)) continue;
+    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y, v.z - az)) continue;
     let len = 1;
-    while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
-    if (len >= 8) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
+    while (free(v.x + ax * len, v.y, v.z + az * len)) len++;
+    if (len >= NEED.bridge) out.set(`${ax}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, len });
   }
   return out;
 }
@@ -124,15 +131,47 @@ function detectPlatforms() {
   return out;
 }
 // 阶梯：每级前进 1 格、升高 1 格，连续 ≥4 级
-function detectStairs() {
+function detectStairs(free = S) {
   const out = new Map();
   for (const v of voxels) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (S(v.x - ax, v.y - 1, v.z - az)) continue;
+    if (!free(v.x, v.y, v.z) || free(v.x - ax, v.y - 1, v.z - az)) continue;
     let n = 1;
-    while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
-    if (n >= 4) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
+    while (free(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+    if (n >= NEED.stair) out.set(`${ax},${az}:${v.x},${v.y},${v.z}`, { x: v.x, y: v.y, z: v.z, ax, az, n });
   }
   return out;
+}
+
+// ———— “差一点”提示：还没发现的建筑，结构离它只差一两步时，标出下一格该放在哪里 ————
+let hints = [];                    // [{ x, y, z, body, w }]，w 越大越接近完成
+function detectHints(runs) {
+  const out = [], want = t => !discovered.has(t);
+  const push = (x, y, z, from, w) => { if (!S(x, y, z) && from) out.push({ x, y, z, body: from.body, w }); };
+  for (const r of runs) {
+    const top = grid.get(key(r.x, r.top, r.z)), bot = grid.get(key(r.x, r.bottom, r.z));
+    if (want('tower') && r.h >= TOWER_MIN - 2 && r.h < TOWER_MIN + 2 && relY(r.x, r.top, r.z) >= 0) push(r.x, r.top + 1, r.z, top, r.h / TOWER_MIN);
+    if (want('anchor') && r.h >= NEED.anchor - 2 && relY(r.x, r.bottom, r.z) <= 0) push(r.x, r.bottom - 1, r.z, bot, r.h / NEED.anchor);
+  }
+  for (const v of voxels) {
+    if (want('bridge')) for (const [ax, az] of [[1, 0], [0, 1]]) {
+      if (S(v.x - ax, v.y, v.z - az)) continue;
+      let len = 1; while (S(v.x + ax * len, v.y, v.z + az * len)) len++;
+      if (len >= NEED.bridge - 2 && len < NEED.bridge) push(v.x + ax * len, v.y, v.z + az * len, grid.get(key(v.x + ax * (len - 1), v.y, v.z + az * (len - 1))), len / NEED.bridge);
+    }
+    if (want('stair')) for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (S(v.x - ax, v.y - 1, v.z - az)) continue;
+      let n = 1; while (S(v.x + ax * n, v.y + n, v.z + az * n)) n++;
+      if (n === NEED.stair - 1) push(v.x + ax * n, v.y + n, v.z + az * n, grid.get(key(v.x + ax * (n - 1), v.y + n - 1, v.z + az * (n - 1))), 0.7);
+    }
+    if (want('platform')) {
+      let filled = 0, miss = null;
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { if (S(v.x + i, v.y, v.z + j)) filled++; else if (!miss) miss = [v.x + i, v.z + j]; }
+      if (filled >= 7 && filled < 9 && miss) push(miss[0], v.y, miss[1], v, filled / 9);
+    }
+  }
+  // 去重、按接近程度排序，最多提示 4 处，避免满屏都是
+  const seen = new Set();
+  return out.sort((a, b) => b.w - a.w).filter(h => { const k = key(h.x, h.y, h.z); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 4);
 }
 
 function flashCell(x, y, z, delay = 0) { const v = grid.get(key(x, y, z)); if (v) flashes.push({ v, t0: clock.elapsedTime + delay }); }
@@ -202,13 +241,13 @@ function applyColors() {
     paint(a.x + a.ax * m, a.y + 1, a.z + a.az * m, PAL.keystone);
   }
   for (const st of features.stairs.values()) for (let i = 0; i < st.n; i++) paint(st.x + st.ax * i, st.y + i, st.z + st.az * i, PAL.stair);
-  for (const an of features.anchors.values()) {
-    for (let y = an.bottom; y <= an.top; y++) paint(an.x, y, an.z, PAL.anchor);
-    paint(an.x, an.bottom, an.z, PAL.anchorTip);
-  }
   for (const tw of features.towers.values()) {
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
+  }
+  for (const an of features.anchors.values()) {
+    for (let y = an.bottom; y <= an.top; y++) paint(an.x, y, an.z, PAL.anchor);
+    paint(an.x, an.bottom, an.z, PAL.anchorTip);
   }
   // 乐器方块：不属于建筑时用乐器颜色；属于建筑时以建筑配色为主、混入一点乐器颜色
   for (const v of voxels) {
@@ -230,7 +269,10 @@ function blend(building, inst) {
 // 不能再算进其他类别。建筑在它的方块全部存在时一直保留归属，拆掉其中任意一块才会释放。
 const PRIORITY = ['anchor', 'tower', 'arch', 'ring', 'stair', 'bridge', 'platform'];   // 同一次放置同时成立时，先到先得的顺序
 const PLURAL = { tower: 'towers', ring: 'rings', arch: 'arches', bridge: 'bridges', platform: 'platforms', anchor: 'anchors', stair: 'stairs' };
-const instances = new Map();   // "类型|key" -> { type, fk, data, cells: [格子key] }
+const instances = new Map();
+// 可以共用方块的类别组合（例如灯塔立在拱门的柱子上、长柱水下是深锚水上是灯塔）
+const COMPAT = { tower: ['arch', 'anchor'], arch: ['tower'], anchor: ['tower'] };
+const ok = (type, owners) => !owners || [...owners].every(o => o === type || (COMPAT[type] || []).includes(o));   // "类型|key" -> { type, fk, data, cells: [格子key] }
 
 // 每种建筑占用了哪些方块
 function cellsOf(type, d) {
@@ -254,12 +296,13 @@ function cellsOf(type, d) {
 
 function updateFeatures(allowFx) {
   const runs = columnRuns();
-  const C = { ring: detectRings(), arch: detectArches(), bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
+  const C = { ring: detectRings(), arch: detectArches(), platform: detectPlatforms() };
   // 1) 方块被拆掉的建筑失效，释放归属
   for (const [id, ins] of instances) if (ins.cells.some(c => !grid.has(c))) instances.delete(id);
   const claim = new Map();
-  for (const ins of instances.values()) for (const c of ins.cells) claim.set(c, ins.type);
-  const allowed = (type, cells) => cells.every(c => { const o = claim.get(c); return !o || o === type; });
+  const own = (c, type) => { if (!claim.has(c)) claim.set(c, new Set()); claim.get(c).add(type); };
+  for (const ins of instances.values()) for (const c of ins.cells) own(c, ins.type);
+  const allowed = (type, cells) => cells.every(c => ok(type, claim.get(c)));
 
   // 2) 按优先级接纳本次识别到的建筑；占用了其他类别方块的候选直接忽略
   const fresh = [], detected = new Set();
@@ -269,15 +312,17 @@ function updateFeatures(allowFx) {
     for (const r of runs) {
       let start = null;
       for (let y = r.bottom; y <= r.top + 1; y++) {
-        const o = y <= r.top ? claim.get(key(r.x, y, r.z)) : 'END';
-        const free = !o || o === type;
+        const free = y <= r.top && ok(type, claim.get(key(r.x, y, r.z)));
         if (free && start === null) start = y;
         if (!free && start !== null) { out.push({ x: r.x, z: r.z, bottom: start, top: y - 1, h: y - start }); start = null; }
       }
     }
     return out;
   };
-  for (const type of PRIORITY) for (const [fk, data] of (type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor')) : C[type])) {
+  const freeFor = type => (x, y, z) => S(x, y, z) && ok(type, claim.get(key(x, y, z)));
+  const detect = type => type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor'))
+    : type === 'bridge' ? detectBridges(freeFor('bridge')) : type === 'stair' ? detectStairs(freeFor('stair')) : C[type];
+  for (const type of PRIORITY) for (const [fk, data] of detect(type)) {
     const id = type + '|' + fk, cells = cellsOf(type, data);
     if (!cells.length || !allowed(type, cells)) continue;
     detected.add(id);
@@ -290,7 +335,7 @@ function updateFeatures(allowFx) {
       const ins = { type, fk, data, cells };
       instances.set(id, ins); fresh.push(ins);
     }
-    for (const c of cells) claim.set(c, type);
+    for (const c of cells) own(c, type);
   }
   // 3) 没再被识别到、但被同类新建筑覆盖的旧建筑（如环被扩大、长桥向前延伸）移除
   for (const [id, ins] of instances) {
@@ -314,6 +359,7 @@ function updateFeatures(allowFx) {
   for (const t of PRIORITY) F[PLURAL[t]] = new Map();
   for (const ins of instances.values()) F[PLURAL[ins.type]].set(ins.fk, ins.data);
   features = F;
+  hints = detectHints(runs);
   applyColors();
   for (const b of bodies) b.dirty = true;
   echoCols = new Set();
@@ -322,4 +368,4 @@ function updateFeatures(allowFx) {
 
 function resetFeatures() { instances.clear(); }
 
-export { instances, cellsOf, resetFeatures, PRIORITY, features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };
+export { hints, instances, cellsOf, resetFeatures, PRIORITY, features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };

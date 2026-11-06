@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { INST, SEED_SHAPES, TYPE_INST } from './config.js';
+import { INST, MILESTONES, SEED_SHAPES, TYPE_INST } from './config.js';
 import { camera, clock, renderer, scene } from './core.js';
 import { toast } from './ui.js';
 import { U, addRipple, waterMat } from './water.js';
@@ -7,6 +7,7 @@ import { addVoxel, grid, spanR, tmpW, toWorld, viewTarget, voxels } from './worl
 import { panOf, sfx } from './audio.js';
 import { instances, worldOf } from './features.js';
 import { flashes } from './overlays.js';
+import { refreshCodex } from './codex.js';
 
 // ================= 解锁：色彩进度 + 远处出现乐器组件 =================
 const discovered = new Set(), TOTAL_TYPES = 7;
@@ -23,6 +24,7 @@ function discover(type, x = viewTarget.x, z = viewTarget.z) {
   colPrev = colorful;
   discovered.add(type);
   order.push(type);
+  refreshCodex();
   colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
   bloomX = x; bloomZ = z; bloomT = U.uTime.value;
   const u = waterMat.uniforms;
@@ -71,6 +73,19 @@ function finaleLevel(t) {
   return a < 1.5 ? a / 1.5 : 0.35 + 0.65 * Math.exp(-(a - 1.5) / 2.5);
 }
 
+// ———— 随便搭也有回应：结构长到某个方块数时，海轻轻回应一次 ————
+let nextMilestone = 0;
+function growthReward(n) {
+  if (nextMilestone >= MILESTONES.length || n < MILESTONES[nextMilestone]) return;
+  nextMilestone++;
+  const cx = viewTarget.x, cz = viewTarget.z, now = clock.elapsedTime;
+  setTimeout(() => {
+    addRipple(cx, cz, 0.22);
+    sfx.chord(0);
+    for (const v of voxels) flashes.push({ v, t0: clock.elapsedTime + Math.hypot(v.x - cx, v.z - cz) / 6 });
+  }, 700);
+}
+
 // 在虚空中找一块空地，生成一个小小的乐器组件
 function spawnSeed(inst) {
   if (!voxels.length) return;
@@ -107,4 +122,4 @@ function updateColorful(dt) {
   U.uFogCol.value.copy(bgNow);
 }
 
-export { discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };
+export { growthReward, discovered, TOTAL_TYPES, colorful, BG_MONO, BG_COLOR, bgNow, discover, spawnSeed, updateColorful };

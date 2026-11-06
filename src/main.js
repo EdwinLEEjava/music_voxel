@@ -4,12 +4,14 @@ import { VIEW_DIR, camera, clock, renderer, scene } from './core.js';
 import { U, waterMat } from './water.js';
 import { bodies, rebuildBody, spanR, tmpT, view, viewTarget, voxels } from './world.js';
 import { processQueue } from './notes.js';
+import './codex.js';
+import { updateCompanion } from './companion.js';
 import { updateColorful } from './progress.js';
 import { m4, pos, q, sc, updateOverlays } from './overlays.js';
-import { ghost, ghostEdges, lastPickDist, pickCell, pointer, pointers, zoom } from './input.js';
+import { ghost, ghostEdges, lastPickDist, pan, pickCell, pointer, pointers, updatePan, zoom } from './input.js';
 
 // ================= 主循环 =================
-const euler = new THREE.Euler();
+const euler = new THREE.Euler(), tmpV = new THREE.Vector3();
 let camDist = 8;
 
 function frame() {
@@ -52,7 +54,8 @@ function frame() {
   }
 
   // 相机：方向固定，跟随所有物块的中心，距离随范围变大
-  view.lerp(viewTarget, 1 - Math.exp(-dt * 1.5));
+  updatePan(dt);
+  view.lerp(tmpV.copy(viewTarget).add(pan), 1 - Math.exp(-dt * 1.5));
   const fit = 7 + spanR * 2.6 + Math.sqrt(n) * 0.35;
   camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
@@ -61,6 +64,7 @@ function frame() {
   scene.updateMatrixWorld();
   processQueue(t);
   updateOverlays(t, dt);
+  updateCompanion(t, dt);
   updateColorful(dt);
 
   // 悬停预览

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clock, scene } from './core.js';
 import { bodies, grid, key, tmpW, toWorld, voxelMatrix } from './world.js';
 import { panOf, sfx } from './audio.js';
-import { features } from './features.js';
+import { features, hints } from './features.js';
 
 // ================= 覆盖层：闪光 / 微光 / 气泡 / 灯塔光束（都跟随所在物块） =================
 function overlayMesh(geo, max, order) {
@@ -16,6 +16,7 @@ const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
 const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);
+const hintMesh = overlayMesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), 8, 13);
 const flashes = [], bubbles = [];
 const alive = v => grid.get(key(v.x, v.y, v.z)) === v;
 
@@ -62,6 +63,16 @@ function updateOverlays(t, dt) {
   }
   markMesh.count = mi;
   markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
+
+  // “差一点”提示：空格子上一个很淡、缓慢呼吸的方块
+  let hi = 0;
+  for (const h of hints) {
+    if (!bodies.has(h.body)) continue;
+    hintMesh.setMatrixAt(hi, voxelMatrix(h, m4));
+    hintMesh.setColorAt(hi++, col.setScalar(0.05 + 0.06 * (0.5 + 0.5 * Math.sin(t * 2.4 + h.x + h.z))));
+  }
+  hintMesh.count = hi;
+  hintMesh.instanceMatrix.needsUpdate = true; hintMesh.instanceColor.needsUpdate = true;
 
   // 泉：持续冒泡 + 零星气泡声
   for (const r of features.rings.values()) {

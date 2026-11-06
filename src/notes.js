@@ -5,6 +5,7 @@ import { NB, grid, key, noteStep, tmpW, toWorld, voxels } from './world.js';
 import { panOf, sfx } from './audio.js';
 import { echoCols } from './features.js';
 import { flashes } from './overlays.js';
+import { notice } from './companion.js';
 
 // ================= 发声队列：放置回响 & 水波 =================
 const noteQueue = [];              // {at, v, vol, wave}
@@ -40,6 +41,7 @@ function waterTap(wx, wz) {
   lastTap = t0;
   for (const e of noteQueue) if (e.wave) e.vol *= 0.35;  // 新水波来了，旧水波剩下的音减弱
   addRipple(wx, wz, 0.22);
+  notice(wx, wz);
   sfx.tap(panOf(tmpW.set(wx, 0, wz)));
   const id = ++waveId;
   for (const v of voxels) {
