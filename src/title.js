@@ -1,7 +1,7 @@
 import { clock } from './core.js';
 import { uiState } from './ui.js';
 import { U } from './water.js';
-import { startLevel } from './level.js';
+import { focusPoint, startLevel } from './level.js';
 import { sfx } from './audio.js';
 import { quitGame } from './menu.js';
 import { startIntro } from './main.js';
@@ -26,7 +26,11 @@ document.body.appendChild(titleEl);
 let openT = -1;
 function fogOpen() {
   const a = Math.min(1, (clock.elapsedTime - openT) / FOG_OPEN_SEC);
-  U.uFogPush.value = FOG_HIDDEN * (1 - a * a * (3 - 2 * a));   // 平滑地从“全雾”退到 0
+  // 先在塔周围撑开一小片（第 4 盏“光”），再整体退到平时的范围：视线先落在塔上
+  const f = focusPoint(), r = a < 0.35 ? 9 * a / 0.35 : 9 - 7 * (a - 0.35) / 0.65;
+  if (f) U.uLights.value[3].set(f.x, f.z, r, 0);
+  const b = Math.max(0, (a - 0.25) / 0.75);
+  U.uFogPush.value = FOG_HIDDEN * (1 - b * b * (3 - 2 * b));   // 平滑地从“全雾”退到 0
   if (a < 1) requestAnimationFrame(fogOpen);
 }
 

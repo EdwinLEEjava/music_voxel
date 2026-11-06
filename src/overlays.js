@@ -17,6 +17,10 @@ function overlayMesh(geo, max, order) {
 const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
+// 关卡里的微光：塔顶将熄的余烬、亮着的窗（关卡往 glows 里放 { x, y, z, kind }）
+const GLOW_MAX = 16;
+const glowMesh = overlayMesh(new THREE.BoxGeometry(1.03, 1.03, 1.03), GLOW_MAX, 14);
+const glows = [];
 const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);
 const hintMesh = overlayMesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), 8, 13);
 const flashes = [], bubbles = [];
@@ -64,6 +68,17 @@ function updateOverlays(t, dt) {
     markMesh.setColorAt(mi++, col.setScalar(pulse * 0.8));
   }
   markMesh.count = mi;
+  let gi = 0;
+  for (const g of glows) {
+    const v = grid.get(key(g.x, g.y, g.z));
+    if (!v || v.hidden || gi >= GLOW_MAX) continue;
+    // 余烬：很弱、缓慢呼吸；窗：稳定的一点暖光
+    const k = g.kind === 'ember' ? 0.05 + 0.07 * Math.pow(0.5 + 0.5 * Math.sin(t * 1.1 + g.x), 2) : 0.07 + 0.01 * Math.sin(t * 0.7);
+    glowMesh.setMatrixAt(gi, voxelMatrix(v, m4));
+    glowMesh.setColorAt(gi++, col.setRGB(k * 1.6, k * 1.0, k * 0.4));
+  }
+  glowMesh.count = gi;
+  glowMesh.instanceMatrix.needsUpdate = true; if (glowMesh.instanceColor) glowMesh.instanceColor.needsUpdate = true;
   markMesh.instanceMatrix.needsUpdate = true; markMesh.instanceColor.needsUpdate = true;
 
   // “差一点”提示：空格子上一个很淡、缓慢呼吸的方块
@@ -113,4 +128,4 @@ function updateOverlays(t, dt) {
   });
 }
 
-export { overlayMesh, FLASH_MAX, MARK_MAX, BUB_MAX, flashMesh, markMesh, bubMesh, flashes, bubbles, alive, spawnBubble, beamGeo, beamMat, beams, col, m4, m5, q, sc, pos, updateOverlays };
+export { glows, overlayMesh, FLASH_MAX, MARK_MAX, BUB_MAX, flashMesh, markMesh, bubMesh, flashes, bubbles, alive, spawnBubble, beamGeo, beamMat, beams, col, m4, m5, q, sc, pos, updateOverlays };
