@@ -205,6 +205,7 @@ function resetAll() {
 // 全局范围：相机目标与距离
 const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
 let spanR = 0;
+const framePoints = [];             // 镜头取景时也要包进来的点（例如远处的小船），由关卡填写 [{ x, z }]
 function updateBounds() {
   updateFogField(voxels.filter(v => !v.hidden).map(v => [v.x, v.z]));
   if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
@@ -213,6 +214,7 @@ function updateBounds() {
     x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z);
     y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y);
   }
+  for (const p of framePoints) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
   viewTarget.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
   spanR = Math.max(Math.hypot(x1 - x0, z1 - z0) / 2, (y1 - y0) / 2);
 }
@@ -222,4 +224,4 @@ function noteStep(v) {
   return Math.max(0, Math.min(11, 5 + v.y + (((v.x + v.z) % 2 + 2) % 2) * 2));
 }
 
-export { blocked, voxels, grid, key, NB, S, bodies, FACES, CORNERS, AO_LEVEL, solidMat, growMat, boxGeo, createBody, destroyBody, updateCom, toWorld, tmpT, voxelMatrix, rebuildBody, mergeInto, splitBody, impulse, tmpW, addVoxel, removeVoxel, removeLast, resetAll, view, viewTarget, spanR, updateBounds, noteStep };
+export { framePoints, blocked, voxels, grid, key, NB, S, bodies, FACES, CORNERS, AO_LEVEL, solidMat, growMat, boxGeo, createBody, destroyBody, updateCom, toWorld, tmpT, voxelMatrix, rebuildBody, mergeInto, splitBody, impulse, tmpW, addVoxel, removeVoxel, removeLast, resetAll, view, viewTarget, spanR, updateBounds, noteStep };

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clock, camera, scene } from './core.js';
 import { hintEl, toast, uiState } from './ui.js';
 import { U, addRipple, makeUnderwater } from './water.js';
-import { S, addVoxel, blocked, grid, key, resetAll, tmpW, toWorld, updateBounds, voxels } from './world.js';
+import { S, addVoxel, blocked, framePoints, grid, key, resetAll, tmpW, toWorld, updateBounds, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { REACT, setLevelState } from './features.js';
 import { discover, markProgress } from './progress.js';
@@ -25,7 +25,7 @@ const MAT = {
 };
 const LAMP_LIT_Y = 6;                  // 灯离水面这么高（格）就能照到远处 → 点亮
 const LIGHT_R = 19, LIGHT_SEC = 4.5;   // 灯塔点亮后，光在雾里撑开的半径（格）和用时
-const BOAT_CLEAR = 2.6, BOAT_SEC = 9;  // 小船周围散开的雾（格）；回港用时（秒）
+const BOAT_CLEAR = 2.6, BOAT_SEC = 14; // 小船周围散开的雾（格）；回港用时（秒）。船离港湾约 15 格，中间隔着一段完整的雾
 
 const hash = (x, z) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v); };
 // 一座岩石岛：边缘缺几块、零星有凸起的岩石，形状不规整；keep 里的格子保证是平地（房子、港湾、塔脚）
@@ -53,7 +53,7 @@ const ISLANDS = [
     ],
     house: { x0: -1, z0: 0, w: 2, d: 2, h: 1.7 },
     tower: { x: 4, z: -2, bottom: 1, top: 3 },
-    boat: { from: { x: -9.5, z: 6 }, to: { x: -5, z: 3.25 } },
+    boat: { from: { x: -20, z: 9 }, to: { x: -5, z: 3.25 } },
   },
   { // 第二座：类似的小岛，塔更矮（灯在 3，要顶到 6：补 3 格），没有提示
     cells: () => [
@@ -64,7 +64,7 @@ const ISLANDS = [
     ],
     house: { x0: -14, z0: -8, w: 1, d: 1, h: 1.4 },
     tower: { x: -11, z: -11, bottom: 1, top: 2 },
-    boat: { from: { x: -21, z: -4 }, to: { x: -16.5, z: -6.75 } },
+    boat: { from: { x: -32, z: -2 }, to: { x: -16.5, z: -6.75 } },
   },
 ];
 
@@ -122,6 +122,7 @@ function build(i, hidden) {
   const hs = def.house;
   for (const [x, z] of footprint(hs.x0, hs.z0, hs.w, hs.d)) for (let y = 1; y <= 3; y++) blocked.add(key(x, y, z));
   s.built = true; s.hidden = hidden;
+  if (!hidden) framePoints.push(def.boat.from);
   s.lampY = def.tower.top + 1;
   s.lamp.visible = s.house.visible = s.boat.visible = !hidden;
 }
@@ -191,6 +192,7 @@ function updateLevel(t, dt) {
       for (const v of voxels) v.hidden = false;
       isles[1].hidden = false;
       isles[1].lamp.visible = isles[1].house.visible = isles[1].boat.visible = true;
+      framePoints.push(ISLANDS[1].boat.from);
       updateBounds();
       const b = ISLANDS[1].tower;
       addRipple(b.x, b.z, 0.2);
@@ -240,7 +242,7 @@ function clearIsles() {
 }
 function startLevel() {
   stage = 0; lights = []; revealAt = null;
-  blocked.clear();
+  blocked.clear(); framePoints.length = 0;
   for (const l of U.uLights.value) l.set(0, 0, -99, 0);
   clearIsles();
   build(0, false);
