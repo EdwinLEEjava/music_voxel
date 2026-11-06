@@ -55,7 +55,8 @@ function updateColorful(dt) {
   // 天空与雾：等冲击波扫到镜头附近时跟着变色
   const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
   const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
-  bgNow.lerpColors(BG_MONO, BG_COLOR, colPrev + (colorful - colPrev) * k);
+  U.uProg.value = colPrev + (colorful - colPrev) * k;
+  bgNow.lerpColors(BG_MONO, BG_COLOR, U.uProg.value);
   renderer.setClearColor(bgNow, 1);
   U.uFogCol.value.copy(bgNow);
 }
