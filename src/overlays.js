@@ -12,7 +12,7 @@ function overlayMesh(geo, max, order) {
   scene.add(m);
   return m;
 }
-const FLASH_MAX = 96, MARK_MAX = 128, BUB_MAX = 400;
+const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
 const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);

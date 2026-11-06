@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GROW_MAX, WATER_Y, WHITE } from './config.js';
 import { clock, scene } from './core.js';
 import { updateHud } from './ui.js';
-import { addRipple, makeUnderwater } from './water.js';
+import { addRipple, makeUnderwater, updateFogField } from './water.js';
 import { sfx } from './audio.js';
 import { noteQueue, queueEcho } from './notes.js';
 import { resetFeatures, updateFeatures } from './features.js';
@@ -195,6 +195,7 @@ function resetAll() {
 const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
 let spanR = 0;
 function updateBounds() {
+  updateFogField(voxels.map(v => [v.x, v.z]));
   if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const v of voxels) {

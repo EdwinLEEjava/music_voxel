@@ -57,9 +57,6 @@ function frame() {
   camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
-  // 雾紧贴着结构：从结构边缘外 1 格开始，6 格内完全隐入夜色；和镜头缩放无关
-  U.uCenter.value.set(view.x, view.z);
-  U.uFogNear.value = spanR + 1; U.uFogFar.value = spanR + 7;
 
   scene.updateMatrixWorld();
   processQueue(t);

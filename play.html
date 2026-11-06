@@ -115,11 +115,13 @@ function updateHud() { countEl.textContent = voxels.length; }
 const U = {
   uTime: { value: 0 },
   uWaterY: { value: WATER_Y },
-  // 雾：按到结构中心的水平距离计算（不受镜头缩放影响），水面和方块共用
-  uCenter: { value: new THREE.Vector2() },
-  uFogNear: { value: 4 }, uFogFar: { value: 10 },
+  // 雾：按到“最近方块”的水平距离计算（贴着结构轮廓，不受镜头缩放影响），水面和方块共用
+  uFogTex: { value: null }, uFogO: { value: new THREE.Vector2() }, uFogS: { value: new THREE.Vector2(1, 1) },
+  uFogNear: { value: 0.8 }, uFogFar: { value: 5.5 },
   uFogCol: { value: new THREE.Color(0, 0, 0) },
-  uProg: { value: 0 },             // 世界被点亮的程度（0 开局 → 1 全部发现），跟着冲击波同步
+  uProg: { value: 0 },
+  uFinale: { value: 0 },           // 结局的高潮：月光、星光、方块一起亮起，之后停在一个略亮的“苏醒”状态
+             // 世界被点亮的程度（0 开局 → 1 全部发现），跟着冲击波同步
   uRip: { value: Array.from({ length: RIPPLE_N }, () => new THREE.Vector4(0, 0, -99, 0)) }, // x, z, 开始时间, 强度
 };
 let ripIdx = 0;
@@ -170,6 +172,15 @@ float ripples(vec2 p) {
   return h;
 }
 float waterH(vec2 p) { return waveBase(p) + ripples(p); }
+// 雾：距离图里存的是每格到最近方块的距离（×10），再叠两层缓慢流动的噪声 → 不规则、会呼吸的雾边
+uniform sampler2D uFogTex;
+uniform vec2 uFogO, uFogS;
+uniform float uFogNear, uFogFar;
+float fogAmt(vec2 p) {
+  float d = texture2D(uFogTex, (p - uFogO + 0.5) / uFogS).r * 25.5;
+  d += vnoise(p * 0.32 + vec2(uTime * 0.05, -uTime * 0.03)) * 1.5 + vnoise(p * 0.85 - uTime * 0.07) * 0.5;
+  return smoothstep(uFogNear, uFogFar, d);
+}
 float caustic(vec2 p) {
   float t = uTime * 0.8;
   vec2 q = p * 1.6;
@@ -194,7 +205,8 @@ const waterMat = new THREE.ShaderMaterial({
     uColorful: { value: 0 },
     uColPrev: { value: 0 },
     uBloom: { value: new THREE.Vector4(0, 0, -99, 0) },   // 色彩冲击波：x, z, 开始时间, 速度
-    uBloomCol: { value: new THREE.Color(0.85, 0.9, 1.0) },   // 冲击波光环：统一的月白色
+    uBloomCol: { value: new THREE.Color(0.85, 0.9, 1.0) },
+    uBloomAmp: { value: 1 },   // 冲击波光环：统一的月白色
     uGlint: { value: new THREE.Vector3(-0.55, 0.47, -0.69).normalize() },
   },
   // 低多边形：顶点在 GPU 上按波浪抬升；片元里用屏幕导数求“三角面”法线，
@@ -217,8 +229,7 @@ const waterMat = new THREE.ShaderMaterial({
     uniform float uColPrev;
     uniform vec4 uBloom;
     uniform vec3 uBloomCol;
-    uniform vec2 uCenter;
-    uniform float uFogNear, uFogFar;
+    uniform float uBloomAmp, uFinale;
     varying vec3 vWP;
     void main() {
       vec3 N = normalize(cross(dFdx(vWP), dFdy(vWP)));
@@ -240,22 +251,22 @@ const waterMat = new THREE.ShaderMaterial({
       // 整面闪光：朝向“月光”的那些三角面整块亮起
       float s = max(dot(reflect(-uGlint, N), V), 0.0);
       // 月夜渐明：越往后月光越亮
-      col += mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03) * (1.0 + 1.3 * cf);
+      col += mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03) * (1.0 + 1.3 * cf + 1.2 * uFinale);
 
       // 星光倒影：零星的三角面一闪一闪，纯白；随世界被点亮而出现（冲击波扫过才有）
       vec2 sc = floor(vWP.xz * 2.5);
-      float st = step(mix(0.99, 0.962, cf), hashP(sc)) * pow(0.5 + 0.5 * sin(uTime * (1.5 + hashP(sc + 7.0) * 2.5) + hashP(sc + 3.0) * 6.28), 3.0);
-      col += vec3(st * 0.22 * min(1.0, cf * 1.6));
+      float st = step(mix(0.99, 0.962, cf) - 0.02 * uFinale, hashP(sc)) * pow(0.5 + 0.5 * sin(uTime * (1.5 + hashP(sc + 7.0) * 2.5) + hashP(sc + 3.0) * 6.28), 3.0);
+      col += vec3(st * 0.22 * min(1.0, cf * 1.6) * (1.0 + uFinale));
 
       float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
       col += fres * 0.05;
       // 光环：前沿亮、后面拖一条渐暗的尾巴，随时间整体淡出
       if (bAge > 0.0 && bAge < 9.0) {
         float ring = bd > 0.0 ? exp(-bd * bd * 1.2) : exp(bd * 0.35);
-        col += uBloomCol * ring * (0.28 + 0.25 * shade) * exp(-bAge * 0.35);
+        col += uBloomCol * ring * (0.28 + 0.25 * shade) * exp(-bAge * 0.35) * uBloomAmp;
       }
 
-      float fade = 1.0 - smoothstep(uFogNear, uFogFar, length(vWP.xz - uCenter));
+      float fade = 1.0 - fogAmt(vWP.xz);
       gl_FragColor = vec4(col, (0.82 + fres * 0.15) * fade);
     }`,
 });
@@ -278,6 +289,43 @@ water.frustumCulled = false;
 water.renderOrder = 10;
 scene.add(water);
 
+// —— 雾的距离图：俯视每一格到最近方块的距离 ——
+// pts：方块的 (x, z) 列表；结构变化时调用
+const FOG_PAD = 12;
+let fogData = null;
+function updateFogField(pts) {
+  if (!pts.length) pts = [[0, 0]];
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  x0 -= FOG_PAD; z0 -= FOG_PAD; x1 += FOG_PAD; z1 += FOG_PAD;
+  const W = x1 - x0 + 1, H = z1 - z0 + 1, d = new Float32Array(W * H).fill(1e9);
+  for (const [x, z] of pts) d[(z - z0) * W + (x - x0)] = 0;
+  // 两遍倒角距离变换（近似欧氏距离）
+  const D = 1, DD = Math.SQRT2;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const k = j * W + i; let v = d[k];
+    if (i > 0) v = Math.min(v, d[k - 1] + D);
+    if (j > 0) { v = Math.min(v, d[k - W] + D); if (i > 0) v = Math.min(v, d[k - W - 1] + DD); if (i < W - 1) v = Math.min(v, d[k - W + 1] + DD); }
+    d[k] = v;
+  }
+  for (let j = H - 1; j >= 0; j--) for (let i = W - 1; i >= 0; i--) {
+    const k = j * W + i; let v = d[k];
+    if (i < W - 1) v = Math.min(v, d[k + 1] + D);
+    if (j < H - 1) { v = Math.min(v, d[k + W] + D); if (i < W - 1) v = Math.min(v, d[k + W + 1] + DD); if (i > 0) v = Math.min(v, d[k + W - 1] + DD); }
+    d[k] = v;
+  }
+  const bytes = new Uint8Array(W * H);
+  for (let k = 0; k < bytes.length; k++) bytes[k] = Math.min(255, Math.round(d[k] * 10));
+  const old = U.uFogTex.value;
+  const tex = new THREE.DataTexture(bytes, W, H, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  U.uFogTex.value = tex; U.uFogO.value.set(x0, z0); U.uFogS.value.set(W, H);
+  if (old) old.dispose();
+}
+
+updateFogField([]);   // 开局：只有原点周围一小片
+
 // —— 让方块知道自己在水下：越深越暗、带焦散光纹，水线处有一圈亮边 ——
 function makeUnderwater(material) {
   material.onBeforeCompile = shader => {
@@ -291,7 +339,7 @@ function makeUnderwater(material) {
         #endif
         vWP = (modelMatrix * wp4).xyz;`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform vec2 uCenter;\nuniform float uFogNear, uFogFar, uProg;\nuniform vec3 uFogCol;\n' + WAVE_GLSL)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nuniform float uProg, uFinale;\nuniform vec3 uFogCol;\n' + WAVE_GLSL)
       .replace('#include <fog_fragment>', `
         float depth = (uWaterY + waterH(vWP.xz)) - vWP.y;
         if (depth > 0.0) {
@@ -301,7 +349,8 @@ function makeUnderwater(material) {
           gl_FragColor.rgb = gl_FragColor.rgb * (0.35 + 0.65 * k) + c * mix(0.45, 0.7, uProg) * k;
         }
         gl_FragColor.rgb += (1.0 - smoothstep(0.0, 0.04, abs(depth))) * 0.45;
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogCol, smoothstep(uFogNear, uFogFar, length(vWP.xz - uCenter)));`);
+        gl_FragColor.rgb += vec3(0.85, 0.9, 1.0) * 0.06 * uFinale;   // 结局：方块被月光照亮
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogCol, fogAmt(vWP.xz));`);
   };
 }
 
@@ -493,6 +542,7 @@ function resetAll() {
 const view = new THREE.Vector3(), viewTarget = new THREE.Vector3();
 let spanR = 0;
 function updateBounds() {
+  updateFogField(voxels.map(v => [v.x, v.z]));
   if (!voxels.length) { viewTarget.set(0, 0, 0); spanR = 0; return; }
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const v of voxels) {
@@ -1195,21 +1245,63 @@ let colorful = 0;
 const BG_MONO = new THREE.Color(0x000000), BG_COLOR = new THREE.Color(0x06101f), bgNow = new THREE.Color();
 const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
 let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
+const order = [];                 // 发现顺序，结局按这个顺序奏响
+let finaleT = -1;
 
 // x, z：建筑所在的世界坐标，冲击波从这里荡开
 function discover(type, x = viewTarget.x, z = viewTarget.z) {
   if (discovered.has(type)) return;
   colPrev = colorful;
   discovered.add(type);
+  order.push(type);
   colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
   bloomX = x; bloomZ = z; bloomT = U.uTime.value;
   const u = waterMat.uniforms;
   u.uColPrev.value = colPrev;
   u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
+  u.uBloomAmp.value = 1;
   addRipple(x, z, 0.35);
   setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
-  setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
+  if (discovered.size < TOTAL_TYPES) setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
+  else setTimeout(finale, 2800);
 }
+// ———— 结局：七种建筑全部发现 ————
+// 1) 从结构中心荡开一圈又大又慢的白色光环  2) 每种建筑按发现顺序亮起、奏出自己的乐器音（一段上行的旋律）
+// 3) 全部方块从中心向外依次闪亮 + 收尾和弦  4) 月光、星光达到顶峰，之后停在略亮的“苏醒”状态
+const FINALE_STEPS = [4, 5, 6, 7, 8, 9, 10];
+function finale() {
+  const cx = viewTarget.x, cz = viewTarget.z, t = U.uTime.value;
+  finaleT = t;
+  const u = waterMat.uniforms;
+  u.uColPrev.value = colorful;
+  u.uBloom.value.set(cx, cz, t, 5);
+  u.uBloomAmp.value = 2.2;
+  addRipple(cx, cz, 0.45);
+  sfx.chord(0);
+  order.forEach((type, i) => setTimeout(() => {
+    const ins = [...instances.values()].find(o => o.type === type);
+    if (!ins) return;
+    const now = clock.elapsedTime;
+    ins.cells.forEach((k, j) => { const v = grid.get(k); if (v) flashes.push({ v, t0: now + j * 0.03 }); });
+    const v0 = grid.get(ins.cells[0]);
+    sfx.instNote(TYPE_INST[type], FINALE_STEPS[i], v0 ? panOf(toWorld(v0, tmpW)) : 0);
+  }, 1400 + i * 520));
+  const tEnd = 1400 + order.length * 520 + 300;
+  setTimeout(() => {
+    const now = clock.elapsedTime;
+    for (const v of voxels) flashes.push({ v, t0: now + Math.hypot(v.x - cx, v.z - cz) / 8 });
+    sfx.chord(0);
+    addRipple(cx, cz, 0.3);
+    toast('海 醒 了');
+  }, tEnd);
+}
+// 结局的亮度包络：1.5 秒升到顶峰，再用 6 秒左右落到 0.35 并保持
+function finaleLevel(t) {
+  if (finaleT < 0 || t < finaleT) return 0;
+  const a = t - finaleT;
+  return a < 1.5 ? a / 1.5 : 0.35 + 0.65 * Math.exp(-(a - 1.5) / 2.5);
+}
+
 // 在虚空中找一块空地，生成一个小小的乐器组件
 function spawnSeed(inst) {
   if (!voxels.length) return;
@@ -1234,6 +1326,7 @@ function spawnSeed(inst) {
 }
 function updateColorful(dt) {
   waterMat.uniforms.uColorful.value = colorful;
+  U.uFinale.value = finaleLevel(U.uTime.value);
   // 天空与雾：等冲击波扫到镜头附近时跟着变色
   const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
   const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
@@ -1252,7 +1345,7 @@ function overlayMesh(geo, max, order) {
   scene.add(m);
   return m;
 }
-const FLASH_MAX = 96, MARK_MAX = 128, BUB_MAX = 400;
+const FLASH_MAX = 256, MARK_MAX = 128, BUB_MAX = 400;
 const flashMesh = overlayMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), FLASH_MAX, 15);
 const markMesh = overlayMesh(new THREE.BoxGeometry(1.08, 1.08, 1.08), MARK_MAX, 14);
 const bubMesh = overlayMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), BUB_MAX, 17);
@@ -1503,9 +1596,6 @@ function frame() {
   camDist += (fit * zoom - camDist) * (1 - Math.exp(-dt * 2.5));
   camera.position.copy(VIEW_DIR).multiplyScalar(camDist).add(view);
   camera.lookAt(view);
-  // 雾紧贴着结构：从结构边缘外 1 格开始，6 格内完全隐入夜色；和镜头缩放无关
-  U.uCenter.value.set(view.x, view.z);
-  U.uFogNear.value = spanR + 1; U.uFogFar.value = spanR + 7;
 
   scene.updateMatrixWorld();
   processQueue(t);
