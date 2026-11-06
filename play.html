@@ -67,6 +67,7 @@ const INST = {
   bass:    { col: new THREE.Color(0x4f7fd0), name: '贝斯' },
   harp:    { col: new THREE.Color(0xa6d98f), name: '竖琴' },
 };
+const INST_TINT = 0.35;              // 乐器方块组成建筑时，混入乐器颜色的比例（0 = 纯建筑配色，1 = 纯乐器颜色）
 const TYPE_INST = { tower: 'bell', ring: 'glass', arch: 'pluck', bridge: 'marimba', platform: 'pad', anchor: 'bass', stair: 'harp' };
 const SEED_SHAPES = [
   [[0,0,0],[1,0,0],[0,0,1]], [[0,0,0],[1,0,0],[0,1,0]], [[0,0,0],[0,0,1],[0,1,0],[0,1,1]], [[0,0,0],[1,0,0],[2,0,0]],
@@ -1044,7 +1045,19 @@ function applyColors() {
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
   }
-  for (const v of voxels) if (v.inst) v.col = INST[v.inst].col;   // 乐器方块保持自己的颜色
+  // 乐器方块：不属于建筑时用乐器颜色；属于建筑时以建筑配色为主、混入一点乐器颜色
+  for (const v of voxels) {
+    if (!v.inst) continue;
+    const ic = INST[v.inst].col;
+    v.col = v.col ? (v.col === PAL.lamp ? v.col : blend(v.col, ic)) : ic;
+  }
+}
+
+const blendCache = new Map();
+function blend(building, inst) {
+  const k = building.getHexString() + inst.getHexString();
+  if (!blendCache.has(k)) blendCache.set(k, building.clone().lerp(inst, INST_TINT));
+  return blendCache.get(k);
 }
 
 // ———— 方块归属 ————

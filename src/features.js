@@ -1,4 +1,4 @@
-import { INST, PAL, TOWER_MIN } from './config.js';
+import { INST, INST_TINT, PAL, TOWER_MIN } from './config.js';
 import { clock } from './core.js';
 import { toast } from './ui.js';
 import { addRipple } from './water.js';
@@ -210,7 +210,19 @@ function applyColors() {
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
   }
-  for (const v of voxels) if (v.inst) v.col = INST[v.inst].col;   // 乐器方块保持自己的颜色
+  // 乐器方块：不属于建筑时用乐器颜色；属于建筑时以建筑配色为主、混入一点乐器颜色
+  for (const v of voxels) {
+    if (!v.inst) continue;
+    const ic = INST[v.inst].col;
+    v.col = v.col ? (v.col === PAL.lamp ? v.col : blend(v.col, ic)) : ic;
+  }
+}
+
+const blendCache = new Map();
+function blend(building, inst) {
+  const k = building.getHexString() + inst.getHexString();
+  if (!blendCache.has(k)) blendCache.set(k, building.clone().lerp(inst, INST_TINT));
+  return blendCache.get(k);
 }
 
 // ———— 方块归属 ————

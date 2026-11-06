@@ -30,9 +30,10 @@ const INST = {
   bass:    { col: new THREE.Color(0x4f7fd0), name: '贝斯' },
   harp:    { col: new THREE.Color(0xa6d98f), name: '竖琴' },
 };
+const INST_TINT = 0.35;              // 乐器方块组成建筑时，混入乐器颜色的比例（0 = 纯建筑配色，1 = 纯乐器颜色）
 const TYPE_INST = { tower: 'bell', ring: 'glass', arch: 'pluck', bridge: 'marimba', platform: 'pad', anchor: 'bass', stair: 'harp' };
 const SEED_SHAPES = [
   [[0,0,0],[1,0,0],[0,0,1]], [[0,0,0],[1,0,0],[0,1,0]], [[0,0,0],[0,0,1],[0,1,0],[0,1,1]], [[0,0,0],[1,0,0],[2,0,0]],
 ];
 
-export { WATER_Y, RIPPLE_N, WATER_SIZE, GROW_MAX, TOWER_MIN, WAVE_SPEED, ECHO_GAP, VOXEL_COOLDOWN, NOTE_WINDOW, NOTE_WINDOW_MAX, TAP_FAR, ZMIN, ZMAX, WHITE, PAL, INST, TYPE_INST, SEED_SHAPES };
+export { WATER_Y, RIPPLE_N, WATER_SIZE, GROW_MAX, TOWER_MIN, WAVE_SPEED, ECHO_GAP, VOXEL_COOLDOWN, NOTE_WINDOW, NOTE_WINDOW_MAX, TAP_FAR, ZMIN, ZMAX, WHITE, PAL, INST, INST_TINT, TYPE_INST, SEED_SHAPES };
