@@ -100,6 +100,10 @@ const waterMat = new THREE.ShaderMaterial({
   uniforms: {
     ...U,
     uColorful: { value: 0 },
+    // 黎明色板：A 是上一阶段、B 是新阶段；冲击波扫过的地方从 A 变成 B
+    uLoA: { value: new THREE.Color() }, uLoB: { value: new THREE.Color() },
+    uHiA: { value: new THREE.Color() }, uHiB: { value: new THREE.Color() },
+    uGlA: { value: new THREE.Color(1, 1, 1) }, uGlB: { value: new THREE.Color(1, 1, 1) },
     uColPrev: { value: 0 },
     uBloom: { value: new THREE.Vector4(0, 0, -99, 0) },   // 色彩冲击波：x, z, 开始时间, 速度
     uBloomCol: { value: new THREE.Color(0.85, 0.9, 1.0) },
@@ -123,6 +127,7 @@ const waterMat = new THREE.ShaderMaterial({
     uniform vec3 uGlint;
     uniform vec3 uKey;
     uniform float uColorful;
+    uniform vec3 uLoA, uLoB, uHiA, uHiB, uGlA, uGlB;
     uniform float uColPrev;
     uniform vec4 uBloom;
     uniform vec3 uBloomCol;
@@ -140,20 +145,21 @@ const waterMat = new THREE.ShaderMaterial({
       // 色彩冲击波：波前以内是新颜色，以外还是旧颜色；波前本身是一圈柔和的光环
       float bAge = uTime - uBloom.z;
       float bd = length(vWP.xz - uBloom.xy) - bAge * uBloom.w;
-      float cf = mix(uColPrev, uColorful, smoothstep(1.5, -1.5, bd));
-      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), cf);
-      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), cf);
+      float inF = smoothstep(1.5, -1.5, bd);
+      float cf = mix(uColPrev, uColorful, inF);
+      vec3 lo = mix(uLoA, uLoB, inF);
+      vec3 hi = mix(uHiA, uHiB, inF);
       vec3 col = mix(lo, hi, shade);
 
       // 整面闪光：朝向“月光”的那些三角面整块亮起
       float s = max(dot(reflect(-uGlint, N), V), 0.0);
       // 月夜渐明：越往后月光越亮
-      col += mix(vec3(1.0), vec3(1.0, 0.88, 0.68), uColorful) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03) * (1.0 + 1.3 * cf + 1.2 * uFinale);
+      col += mix(uGlA, uGlB, inF) * (pow(s, 16.0) * 0.16 + pow(s, 4.0) * 0.03) * (1.0 + 1.3 * cf + 1.2 * uFinale);
 
       // 星光倒影：零星的三角面一闪一闪，纯白；随世界被点亮而出现（冲击波扫过才有）
       vec2 sc = floor(vWP.xz * 2.5);
       float st = step(mix(0.99, 0.962, cf) - 0.02 * uFinale, hashP(sc)) * pow(0.5 + 0.5 * sin(uTime * (1.5 + hashP(sc + 7.0) * 2.5) + hashP(sc + 3.0) * 6.28), 3.0);
-      col += vec3(st * 0.22 * min(1.0, cf * 1.6) * (1.0 + uFinale));
+      col += vec3(st * 0.22 * min(1.0, cf * 1.6) * (1.0 - smoothstep(0.7, 1.0, cf)) * (1.0 + uFinale));
 
       float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
       col += fres * 0.05;
