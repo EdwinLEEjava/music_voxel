@@ -213,20 +213,94 @@ function applyColors() {
   for (const v of voxels) if (v.inst) v.col = INST[v.inst].col;   // 乐器方块保持自己的颜色
 }
 
+// ———— 方块归属 ————
+// 一个方块一旦属于某种建筑，就只能被同类建筑共用（例如两座拱门共用一根柱子），
+// 不能再算进其他类别。建筑在它的方块全部存在时一直保留归属，拆掉其中任意一块才会释放。
+const PRIORITY = ['anchor', 'tower', 'arch', 'ring', 'stair', 'bridge', 'platform'];   // 同一次放置同时成立时，先到先得的顺序
+const PLURAL = { tower: 'towers', ring: 'rings', arch: 'arches', bridge: 'bridges', platform: 'platforms', anchor: 'anchors', stair: 'stairs' };
+const instances = new Map();   // "类型|key" -> { type, fk, data, cells: [格子key] }
+
+// 每种建筑占用了哪些方块
+function cellsOf(type, d) {
+  const out = [];
+  const add = (x, y, z) => { if (S(x, y, z)) out.push(key(x, y, z)); };
+  if (type === 'tower' || type === 'anchor') for (let y = d.bottom; y <= d.top; y++) add(d.x, y, d.z);
+  else if (type === 'ring') {
+    const seen = new Set();
+    for (const [cx, cz] of d.cells) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const k = key(cx + dx, d.y, cz + dz);
+      if (!seen.has(k) && grid.has(k)) { seen.add(k); out.push(k); }
+    }
+  } else if (type === 'arch') {
+    for (const off of [0, d.k]) for (let dy = -1; dy <= 0; dy++) add(d.x + d.ax * off, d.y + dy, d.z + d.az * off);
+    for (let i = 0; i <= d.k; i++) add(d.x + d.ax * i, d.y + 1, d.z + d.az * i);
+  } else if (type === 'bridge') for (let i = 0; i < d.len; i++) add(d.x + d.ax * i, d.y, d.z + d.az * i);
+  else if (type === 'platform') for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) add(d.x + i, d.y, d.z + j);
+  else if (type === 'stair') for (let i = 0; i < d.n; i++) add(d.x + d.ax * i, d.y + i, d.z + d.az * i);
+  return out;
+}
+
 function updateFeatures(allowFx) {
   const runs = columnRuns();
-  const F = {
-    towers: detectTowers(runs), rings: detectRings(), arches: detectArches(), bridges: detectBridges(),
-    platforms: detectPlatforms(), anchors: detectAnchors(runs), stairs: detectStairs(),
+  const C = { ring: detectRings(), arch: detectArches(), bridge: detectBridges(), platform: detectPlatforms(), stair: detectStairs() };
+  // 1) 方块被拆掉的建筑失效，释放归属
+  for (const [id, ins] of instances) if (ins.cells.some(c => !grid.has(c))) instances.delete(id);
+  const claim = new Map();
+  for (const ins of instances.values()) for (const c of ins.cells) claim.set(c, ins.type);
+  const allowed = (type, cells) => cells.every(c => { const o = claim.get(c); return !o || o === type; });
+
+  // 2) 按优先级接纳本次识别到的建筑；占用了其他类别方块的候选直接忽略
+  const fresh = [], detected = new Set();
+  // 竖直的柱子（灯塔 / 深锚）只用没被其他类别占用的那一段来判断
+  const freeRuns = type => {
+    const out = [];
+    for (const r of runs) {
+      let start = null;
+      for (let y = r.bottom; y <= r.top + 1; y++) {
+        const o = y <= r.top ? claim.get(key(r.x, y, r.z)) : 'END';
+        const free = !o || o === type;
+        if (free && start === null) start = y;
+        if (!free && start !== null) { out.push({ x: r.x, z: r.z, bottom: start, top: y - 1, h: y - start }); start = null; }
+      }
+    }
+    return out;
   };
-  if (allowFx) {
-    for (const [k, tw] of F.towers) { const o = features.towers.get(k); if (!o || tw.h > o.h) react('tower', tw); }
-    for (const [k, r] of F.rings) if (!features.rings.has(k)) react('ring', r);
-    for (const [k, a] of F.arches) if (!features.arches.has(k)) react('arch', a);
-    const once = (name, type, sec) => { for (const [k, f] of F[name]) if (!features[name].has(k) && cooled(type, sec)) { react(type, f); break; } };
-    once('bridges', 'bridge', 2.5); once('platforms', 'platform', 4); once('anchors', 'anchor', 2.5); once('stairs', 'stair', 2.5);
+  for (const type of PRIORITY) for (const [fk, data] of (type === 'tower' ? detectTowers(freeRuns('tower')) : type === 'anchor' ? detectAnchors(freeRuns('anchor')) : C[type])) {
+    const id = type + '|' + fk, cells = cellsOf(type, data);
+    if (!cells.length || !allowed(type, cells)) continue;
+    detected.add(id);
+    const old = instances.get(id);
+    if (old) {
+      if (type === 'ring') { data.timer = old.data.timer; data.popT = old.data.popT; }
+      if (type === 'tower' && data.h > old.data.h) fresh.push(old);   // 灯塔长高：再响一次
+      old.data = data; old.cells = cells;
+    } else {
+      const ins = { type, fk, data, cells };
+      instances.set(id, ins); fresh.push(ins);
+    }
+    for (const c of cells) claim.set(c, type);
   }
-  for (const [k, r] of F.rings) { const o = features.rings.get(k); if (o) { r.timer = o.timer; r.popT = o.popT; } }
+  // 3) 没再被识别到、但被同类新建筑覆盖的旧建筑（如环被扩大、长桥向前延伸）移除
+  for (const [id, ins] of instances) {
+    if (detected.has(id)) continue;
+    const covered = [...instances.values()].some(o => o !== ins && o.type === ins.type && detected.has(o.type + '|' + o.fk) && o.cells.some(c => ins.cells.includes(c)));
+    if (covered) instances.delete(id);
+  }
+
+  // 4) 新建筑的发现反应
+  if (allowFx) {
+    const once = new Set();
+    for (const ins of fresh) {
+      if (!instances.has(ins.type + '|' + ins.fk)) continue;
+      if (['tower', 'ring', 'arch'].includes(ins.type)) react(ins.type, ins.data);
+      else if (!once.has(ins.type) && cooled(ins.type, ins.type === 'platform' ? 4 : 2.5)) { once.add(ins.type); react(ins.type, ins.data); }
+    }
+  }
+
+  // 5) 汇总成按类别的表，供上色、覆盖层、回声使用
+  const F = {};
+  for (const t of PRIORITY) F[PLURAL[t]] = new Map();
+  for (const ins of instances.values()) F[PLURAL[ins.type]].set(ins.fk, ins.data);
   features = F;
   applyColors();
   for (const b of bodies) b.dirty = true;
@@ -234,4 +308,6 @@ function updateFeatures(allowFx) {
   for (const a of F.arches.values()) { if (a.ax) for (let i = 0; i <= a.k; i++) echoCols.add(a.x + i); else echoCols.add(a.x); }
 }
 
-export { features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };
+function resetFeatures() { instances.clear(); }
+
+export { instances, cellsOf, resetFeatures, PRIORITY, features, echoCols, relY, columnRuns, detectTowers, detectAnchors, detectRings, detectArches, detectBridges, detectPlatforms, detectStairs, flashCell, worldOf, REACT, lastFx, cooled, react, applyColors, updateFeatures };

@@ -5,7 +5,7 @@ import { updateHud } from './ui.js';
 import { addRipple, makeUnderwater } from './water.js';
 import { sfx } from './audio.js';
 import { noteQueue, queueEcho } from './notes.js';
-import { updateFeatures } from './features.js';
+import { resetFeatures, updateFeatures } from './features.js';
 import { bubbles, flashes } from './overlays.js';
 
 // ================= 数据 =================
@@ -185,7 +185,7 @@ function removeLast() { if (voxels.length) removeVoxel(voxels[voxels.length - 1]
 function resetAll() {
   for (const b of [...bodies]) destroyBody(b);
   voxels.length = 0; grid.clear();
-  noteQueue.length = 0; bubbles.length = 0; flashes.length = 0;
+  noteQueue.length = 0; bubbles.length = 0; flashes.length = 0; resetFeatures();
   addRipple(view.x, view.z, 0.15);
   sfx.undo();
   updateFeatures(false); updateBounds(); updateHud();
