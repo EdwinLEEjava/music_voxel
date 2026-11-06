@@ -75,6 +75,9 @@ const waterMat = new THREE.ShaderMaterial({
     ...U,
     uFade: { value: 30 },
     uColorful: { value: 0 },
+    uColPrev: { value: 0 },
+    uBloom: { value: new THREE.Vector4(0, 0, -99, 0) },   // 色彩冲击波：x, z, 开始时间, 速度
+    uBloomCol: { value: new THREE.Color(1, 1, 1) },
     uCenter: { value: new THREE.Vector2() },
     uGlint: { value: new THREE.Vector3(-0.55, 0.47, -0.69).normalize() },
   },
@@ -94,6 +97,10 @@ const waterMat = new THREE.ShaderMaterial({
     uniform vec3 uGlint;
     uniform vec3 uKey;
     uniform float uColorful;
+    uniform float uColPrev;
+    uniform vec4 uBloom;
+    uniform vec3 uBloomCol;
+    uniform float uTime;
     uniform vec2 uCenter;
     varying vec3 vWP;
     void main() {
@@ -105,8 +112,12 @@ const waterMat = new THREE.ShaderMaterial({
       float lamb = dot(N, uKey);
       float shade = clamp((lamb - 0.42) * 1.8 + 0.5, 0.0, 1.0);
       // 世界的“色彩度”：从黑白慢慢过渡到深蓝青的夜海
-      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), uColorful);
-      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), uColorful);
+      // 色彩冲击波：波前以内是新颜色，以外还是旧颜色；波前本身是一圈柔和的光环
+      float bAge = uTime - uBloom.z;
+      float bd = length(vWP.xz - uBloom.xy) - bAge * uBloom.w;
+      float cf = mix(uColPrev, uColorful, smoothstep(1.5, -1.5, bd));
+      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), cf);
+      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), cf);
       vec3 col = mix(lo, hi, shade);
 
       // 整面闪光：朝向“月光”的那些三角面整块亮起
@@ -115,6 +126,11 @@ const waterMat = new THREE.ShaderMaterial({
 
       float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
       col += fres * 0.05;
+      // 光环：前沿亮、后面拖一条渐暗的尾巴，随时间整体淡出
+      if (bAge > 0.0 && bAge < 9.0) {
+        float ring = bd > 0.0 ? exp(-bd * bd * 1.2) : exp(bd * 0.35);
+        col += uBloomCol * ring * (0.28 + 0.25 * shade) * exp(-bAge * 0.35);
+      }
 
       float fade = 1.0 - smoothstep(uFade * 0.35, uFade, length(vWP.xz - uCenter));
       gl_FragColor = vec4(col, (0.82 + fres * 0.15) * fade);

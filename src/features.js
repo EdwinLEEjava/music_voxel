@@ -186,7 +186,7 @@ function cooled(type, sec) {
 }
 function react(type, f) {
   toast('发现 · ' + REACT[type](f));
-  discover(type);
+  discover(type, tmpW.x, tmpW.z);   // REACT 把建筑位置留在 tmpW 里
 }
 
 function applyColors() {

@@ -184,6 +184,9 @@ const waterMat = new THREE.ShaderMaterial({
     ...U,
     uFade: { value: 30 },
     uColorful: { value: 0 },
+    uColPrev: { value: 0 },
+    uBloom: { value: new THREE.Vector4(0, 0, -99, 0) },   // 色彩冲击波：x, z, 开始时间, 速度
+    uBloomCol: { value: new THREE.Color(1, 1, 1) },
     uCenter: { value: new THREE.Vector2() },
     uGlint: { value: new THREE.Vector3(-0.55, 0.47, -0.69).normalize() },
   },
@@ -203,6 +206,10 @@ const waterMat = new THREE.ShaderMaterial({
     uniform vec3 uGlint;
     uniform vec3 uKey;
     uniform float uColorful;
+    uniform float uColPrev;
+    uniform vec4 uBloom;
+    uniform vec3 uBloomCol;
+    uniform float uTime;
     uniform vec2 uCenter;
     varying vec3 vWP;
     void main() {
@@ -214,8 +221,12 @@ const waterMat = new THREE.ShaderMaterial({
       float lamb = dot(N, uKey);
       float shade = clamp((lamb - 0.42) * 1.8 + 0.5, 0.0, 1.0);
       // 世界的“色彩度”：从黑白慢慢过渡到深蓝青的夜海
-      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), uColorful);
-      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), uColorful);
+      // 色彩冲击波：波前以内是新颜色，以外还是旧颜色；波前本身是一圈柔和的光环
+      float bAge = uTime - uBloom.z;
+      float bd = length(vWP.xz - uBloom.xy) - bAge * uBloom.w;
+      float cf = mix(uColPrev, uColorful, smoothstep(1.5, -1.5, bd));
+      vec3 lo = mix(vec3(0.035), vec3(0.010, 0.040, 0.068), cf);
+      vec3 hi = mix(vec3(0.085), vec3(0.030, 0.120, 0.165), cf);
       vec3 col = mix(lo, hi, shade);
 
       // 整面闪光：朝向“月光”的那些三角面整块亮起
@@ -224,6 +235,11 @@ const waterMat = new THREE.ShaderMaterial({
 
       float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
       col += fres * 0.05;
+      // 光环：前沿亮、后面拖一条渐暗的尾巴，随时间整体淡出
+      if (bAge > 0.0 && bAge < 9.0) {
+        float ring = bd > 0.0 ? exp(-bd * bd * 1.2) : exp(bd * 0.35);
+        col += uBloomCol * ring * (0.28 + 0.25 * shade) * exp(-bAge * 0.35);
+      }
 
       float fade = 1.0 - smoothstep(uFade * 0.35, uFade, length(vWP.xz - uCenter));
       gl_FragColor = vec4(col, (0.82 + fres * 0.15) * fade);
@@ -1021,7 +1037,7 @@ function cooled(type, sec) {
 }
 function react(type, f) {
   toast('发现 · ' + REACT[type](f));
-  discover(type);
+  discover(type, tmpW.x, tmpW.z);   // REACT 把建筑位置留在 tmpW 里
 }
 
 function applyColors() {
@@ -1162,9 +1178,20 @@ function resetFeatures() { instances.clear(); }
 const discovered = new Set(), TOTAL_TYPES = 7;
 let colorful = 0;
 const BG_MONO = new THREE.Color(0x000000), BG_COLOR = new THREE.Color(0x06101f), bgNow = new THREE.Color();
-function discover(type) {
+const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
+let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
+// x, z：建筑所在的世界坐标，冲击波从这里荡开
+function discover(type, x = viewTarget.x, z = viewTarget.z) {
   if (discovered.has(type)) return;
+  colPrev = colorful;
   discovered.add(type);
+  colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
+  bloomX = x; bloomZ = z; bloomT = U.uTime.value;
+  const u = waterMat.uniforms;
+  u.uColPrev.value = colPrev;
+  u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
+  u.uBloomCol.value.copy(INST[TYPE_INST[type]].col);
+  addRipple(x, z, 0.35);
   setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
   setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
 }
@@ -1191,9 +1218,11 @@ function spawnSeed(inst) {
   b.spin.x += 0.3; b.heaveV -= 1;
 }
 function updateColorful(dt) {
-  colorful += (Math.min(1, discovered.size / TOTAL_TYPES * 1.25) - colorful) * (1 - Math.exp(-dt * 0.6));
   waterMat.uniforms.uColorful.value = colorful;
-  bgNow.lerpColors(BG_MONO, BG_COLOR, colorful);
+  // 天空与雾：等冲击波扫到镜头附近时跟着变色
+  const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
+  const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
+  bgNow.lerpColors(BG_MONO, BG_COLOR, colPrev + (colorful - colPrev) * k);
   renderer.setClearColor(bgNow, 1);
   scene.fog.color.copy(bgNow);
 }

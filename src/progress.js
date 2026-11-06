@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { INST, SEED_SHAPES, TYPE_INST } from './config.js';
-import { renderer, scene } from './core.js';
+import { camera, clock, renderer, scene } from './core.js';
 import { toast } from './ui.js';
-import { addRipple, waterMat } from './water.js';
+import { U, addRipple, waterMat } from './water.js';
 import { addVoxel, spanR, tmpW, viewTarget, voxels } from './world.js';
 import { panOf, sfx } from './audio.js';
 import { worldOf } from './features.js';
@@ -11,9 +11,20 @@ import { worldOf } from './features.js';
 const discovered = new Set(), TOTAL_TYPES = 7;
 let colorful = 0;
 const BG_MONO = new THREE.Color(0x000000), BG_COLOR = new THREE.Color(0x06101f), bgNow = new THREE.Color();
-function discover(type) {
+const BLOOM_SPEED = 9;             // 色彩冲击波扩散速度（格/秒）
+let colPrev = 0, bloomX = 0, bloomZ = 0, bloomT = -99;
+// x, z：建筑所在的世界坐标，冲击波从这里荡开
+function discover(type, x = viewTarget.x, z = viewTarget.z) {
   if (discovered.has(type)) return;
+  colPrev = colorful;
   discovered.add(type);
+  colorful = Math.min(1, discovered.size / TOTAL_TYPES * 1.25);
+  bloomX = x; bloomZ = z; bloomT = U.uTime.value;
+  const u = waterMat.uniforms;
+  u.uColPrev.value = colPrev;
+  u.uBloom.value.set(x, z, bloomT, BLOOM_SPEED);
+  u.uBloomCol.value.copy(INST[TYPE_INST[type]].col);
+  addRipple(x, z, 0.35);
   setTimeout(() => spawnSeed(TYPE_INST[type]), 1600);
   setTimeout(() => toast(`世界多了一分颜色 · ${discovered.size}/${TOTAL_TYPES}`), 4200);
 }
@@ -40,9 +51,11 @@ function spawnSeed(inst) {
   b.spin.x += 0.3; b.heaveV -= 1;
 }
 function updateColorful(dt) {
-  colorful += (Math.min(1, discovered.size / TOTAL_TYPES * 1.25) - colorful) * (1 - Math.exp(-dt * 0.6));
   waterMat.uniforms.uColorful.value = colorful;
-  bgNow.lerpColors(BG_MONO, BG_COLOR, colorful);
+  // 天空与雾：等冲击波扫到镜头附近时跟着变色
+  const dCam = Math.hypot(camera.position.x - bloomX, camera.position.z - bloomZ);
+  const k = THREE.MathUtils.smoothstep((U.uTime.value - bloomT) * BLOOM_SPEED, dCam * 0.3, dCam * 1.1);
+  bgNow.lerpColors(BG_MONO, BG_COLOR, colPrev + (colorful - colPrev) * k);
   renderer.setClearColor(bgNow, 1);
   scene.fog.color.copy(bgNow);
 }
