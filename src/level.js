@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { clock, camera, scene } from './core.js';
 import { hintEl, toast, uiState } from './ui.js';
-import { U, addRipple, makeUnderwater } from './water.js';
+import { U, addRipple } from './water.js';
 import { S, addVoxel, blocked, framePoints, grid, key, resetAll, tmpW, toWorld, updateBounds, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { REACT, setLevelState } from './features.js';
 import { discover, markProgress } from './progress.js';
 import { glows } from './overlays.js';
 import { addItem, inv, setItems } from './hotbar.js';
+import { voxelBoat, voxelHouse, voxelLamp } from './models.js';
 
 // ================= 关卡 =================
 // 第一关：灯塔
@@ -69,40 +70,11 @@ const ISLANDS = [
   },
 ];
 
-// ———— 模型：灯、房子、小船（都是灰色，挂在所在物块上，随岛一起浮动） ————
-const greyMat = hex => { const m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.75 }); makeUnderwater(m); return m; };
-const M = { frame: greyMat(0x5d6065), glass: greyMat(0x9a9da2), house: greyMat(0x8f9296), roof: greyMat(0x63666b), dark: greyMat(0x45484d), boat: greyMat(0x7b7e83) };
+// ———— 模型：灯、房子、小船都是小体素模型（见 models.js），灰色，挂在所在物块上随岛浮动 ————
 const litGlass = new THREE.MeshBasicMaterial({ color: 0xffd34d });
-const box = (w, h, d, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); return m; };
-
-// 灯：底座 + 灯罩 + 顶盖，占一格
-function makeLamp() {
-  const g = new THREE.Group(), glass = box(0.36, 0.4, 0.36, M.glass, 0, -0.14, 0);
-  g.add(box(0.56, 0.12, 0.56, M.frame, 0, -0.44, 0), glass, box(0.5, 0.1, 0.5, M.frame, 0, 0.11, 0), box(0.12, 0.12, 0.12, M.frame, 0, 0.22, 0));
-  g.userData.glass = glass;
-  return g;
-}
-// 房子：方形墙身 + 坡屋顶 + 烟囱 + 门和窗
-function makeHouse({ w, d, h }) {
-  const g = new THREE.Group();
-  g.add(box(w, h, d, M.house, 0, h / 2, 0));
-  const tri = new THREE.Shape();
-  tri.moveTo(-d / 2 - 0.15, 0); tri.lineTo(d / 2 + 0.15, 0); tri.lineTo(0, 0.55 + d * 0.2); tri.lineTo(-d / 2 - 0.15, 0);
-  const roofGeo = new THREE.ExtrudeGeometry(tri, { depth: w + 0.3, bevelEnabled: false }).translate(0, 0, -(w + 0.3) / 2).rotateY(Math.PI / 2);
-  const roof = new THREE.Mesh(roofGeo, M.roof); roof.position.y = h;
-  g.add(roof);
-  g.add(box(0.2, 0.5, 0.2, M.roof, w * 0.25, h + 0.45, -d * 0.2));          // 烟囱
-  g.add(box(0.32, 0.6, 0.04, M.dark, 0, 0.3, d / 2 + 0.01));                 // 门
-  g.add(box(0.04, 0.3, 0.3, M.dark, w / 2 + 0.01, h * 0.6, 0));              // 窗
-  return g;
-}
-function makeBoat() {
-  const g = new THREE.Group();
-  g.add(box(0.55, 0.3, 1.4, M.boat), box(0.4, 0.32, 0.45, M.boat, 0, 0.3, 0.25), box(0.06, 0.9, 0.06, M.boat, 0, 0.6, -0.25));
-  g.renderOrder = 5;
-  scene.add(g);
-  return g;
-}
+const makeLamp = () => voxelLamp();
+const makeHouse = def => voxelHouse(def);
+function makeBoat() { const g = voxelBoat(); g.renderOrder = 5; scene.add(g); return g; }
 // 小船头上闪烁的问号
 function makeQuestion() {
   const el = document.createElement('div');
