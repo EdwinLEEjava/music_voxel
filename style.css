@@ -17,8 +17,8 @@
   }
   #codex {
     position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(0,0,0,.72); color: rgba(255,255,255,.8); font: 13px/1.6 system-ui, sans-serif;
-    opacity: 0; pointer-events: none; transition: opacity .4s; z-index: 5;
+    background: rgba(0,0,0,.78); color: rgba(255,255,255,.8); font: 13px/1.6 system-ui, sans-serif;
+    opacity: 0; pointer-events: none; transition: opacity .35s; z-index: 7;
   }
   #codex.open { opacity: 1; pointer-events: auto; }
   .codex-title { letter-spacing: .4em; margin-bottom: 22px; color: rgba(255,255,255,.65); }
@@ -27,8 +27,49 @@
     height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
     border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 10px 0 8px;
   }
-  .codex-card.lit { border-color: rgba(255,255,255,.22); }
+  .codex-card.lit { border-color: rgba(255,255,255,.3); }
   .codex-art { flex: 1; display: flex; align-items: center; }
   .codex-name { letter-spacing: .3em; color: rgba(255,255,255,.35); }
   .codex-card.lit .codex-name { color: rgba(255,255,255,.85); }
   .codex-foot { margin-top: 20px; color: rgba(255,255,255,.3); font-size: 12px; }
+  /* ———— 底部工具栏：上面按键、下面图标，黑白风格 ———— */
+  #bar { position: fixed; right: 18px; bottom: 14px; display: flex; gap: 10px; z-index: 6; }
+  .bar-btn {
+    width: 52px; padding: 6px 0 8px; display: flex; flex-direction: column; align-items: center; gap: 5px;
+    background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.18); border-radius: 6px;
+    color: rgba(255,255,255,.75); cursor: pointer; transition: border-color .2s, color .2s, background .2s;
+  }
+  .bar-btn:hover { border-color: rgba(255,255,255,.55); color: #fff; background: rgba(255,255,255,.06); }
+  .bar-key { font: 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .08em; opacity: .7; }
+  .bar-icon svg { width: 22px; height: 22px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ———— 设置面板 ———— */
+  #settings, #quit {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.78); color: rgba(255,255,255,.8); font: 13px/1.7 system-ui, sans-serif;
+    opacity: 0; pointer-events: none; transition: opacity .35s; z-index: 7;
+  }
+  #settings.open, #quit.open { opacity: 1; pointer-events: auto; }
+  .set-box { display: flex; width: 520px; min-height: 300px; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; background: #000; }
+  .set-tabs { display: flex; flex-direction: column; padding: 14px 0; border-right: 1px solid rgba(255,255,255,.12); width: 120px; }
+  .set-tab {
+    background: none; border: 0; color: rgba(255,255,255,.45); text-align: left; padding: 9px 20px;
+    font: inherit; letter-spacing: .2em; cursor: pointer; border-left: 2px solid transparent;
+  }
+  .set-tab:hover { color: rgba(255,255,255,.8); }
+  .set-tab.on { color: #fff; border-left-color: #fff; }
+  .set-body { flex: 1; padding: 18px 24px; }
+  .set-h { letter-spacing: .3em; color: #fff; margin-bottom: 12px; }
+  .set-body p { color: rgba(255,255,255,.55); margin: 0 0 18px; }
+  .set-keys { border-collapse: collapse; width: 100%; }
+  .set-keys td { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .set-keys td:first-child { color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding-right: 16px; white-space: nowrap; }
+  .set-keys td:last-child { color: rgba(255,255,255,.55); }
+  .set-act {
+    background: none; border: 1px solid rgba(255,255,255,.45); color: #fff; padding: 6px 22px; border-radius: 4px;
+    font: inherit; letter-spacing: .3em; cursor: pointer; transition: background .2s, color .2s;
+  }
+  .set-act:hover { background: #fff; color: #000; }
+  .set-foot { margin-top: 16px; color: rgba(255,255,255,.3); font-size: 12px; }
+  #quit { background: #000; letter-spacing: .5em; font-size: 15px; cursor: pointer; z-index: 8; }
+  .quit-sub { margin-top: 10px; font-size: 12px; letter-spacing: .2em; color: rgba(255,255,255,.35); }

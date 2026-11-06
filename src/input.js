@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { TAP_FAR, TYPE_INST, WATER_Y, ZMAX, ZMIN } from './config.js';
 import { VIEW_DIR, camera, renderer, scene } from './core.js';
-import { hintEl, sndEl } from './ui.js';
+import { hintEl, uiState } from './ui.js';
 import { NB, S, addVoxel, bodies, grid, key, removeLast, removeVoxel, resetAll, spanR, view, voxels } from './world.js';
 import { sfx } from './audio.js';
 import { waterTap } from './notes.js';
@@ -135,6 +135,7 @@ addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
 addEventListener('blur', () => held.clear());
 addEventListener('keydown', e => {
   sfx.init();
+  if (uiState.open) { held.clear(); return; }   // 图鉴 / 设置打开时，游戏按键不生效
   held.add(e.key.toLowerCase());
   if (e.key.startsWith('Arrow')) e.preventDefault();
   if (e.key === 'c' || e.key === 'C') pan.set(0, 0, 0);
@@ -150,7 +151,6 @@ addEventListener('keydown', e => {
     const next = Object.keys(TYPE_INST).find(t => !discovered.has(t));
     if (next) { toast('调试 · 解锁 ' + next); discover(next, view.x, view.z); }
   }
-  if (e.key === 'm' || e.key === 'M') sndEl.textContent = sfx.toggle() ? '声音开' : '声音关';
 });
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();

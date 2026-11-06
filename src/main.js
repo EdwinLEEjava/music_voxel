@@ -5,6 +5,7 @@ import { U, waterMat } from './water.js';
 import { bodies, rebuildBody, spanR, tmpT, view, viewTarget, voxels } from './world.js';
 import { processQueue } from './notes.js';
 import './codex.js';
+import './menu.js';
 import { updateCompanion } from './companion.js';
 import { updateColorful } from './progress.js';
 import { m4, pos, q, sc, updateOverlays } from './overlays.js';

@@ -1,5 +1,6 @@
 import { PAL } from './config.js';
 import { discovered } from './progress.js';
+import { uiState } from './ui.js';
 
 // ================= 图鉴：按 B 打开 / 关闭 =================
 // 每种建筑一个像素剪影：没发现时是暗色剪影，发现后换成这种建筑的配色
@@ -17,7 +18,9 @@ const COLS = {
   L: PAL.lamp, r: PAL.towerRed, w: PAL.towerWhite, c: PAL.ring, b: PAL.archBeam, k: PAL.keystone, s: PAL.archStone,
   g: PAL.bridge, p: PAL.platform, a: PAL.anchor, t: PAL.anchorTip, h: PAL.stair,
 };
-const DARK = '#2a2d33', WATER = 'rgba(120,160,190,.35)';
+const DARK = '#26272a', WATER = 'rgba(255,255,255,.28)';
+// 黑白风格：已发现的建筑按原配色的明暗显示成灰度
+const grey = col => { const l = Math.round(90 + 165 * (0.3 * col.r + 0.59 * col.g + 0.11 * col.b)); return `rgb(${l},${l},${l})`; };
 
 const el = document.createElement('div');
 el.id = 'codex';
@@ -29,7 +32,7 @@ function svgOf(art, lit) {
   art.forEach((row, y) => [...row].forEach((ch, x) => {
     if (ch === '.') return;
     if (ch === '~') { s += `<rect x="${x * S}" y="${y * S + S / 2 - 1}" width="${S}" height="2" fill="${WATER}"/>`; return; }
-    const fill = lit ? '#' + COLS[ch].getHexString() : DARK;
+    const fill = lit ? grey(COLS[ch]) : DARK;
     s += `<rect x="${x * S + 0.5}" y="${y * S + 0.5}" width="${S - 1}" height="${S - 1}" rx="1" fill="${fill}"/>`;
   }));
   // 水面线画在方块上层，表示“这一格在水面上”
@@ -42,21 +45,18 @@ function render() {
     ENTRIES.map(e => {
       const lit = discovered.has(e.type);
       return `<div class="codex-card${lit ? ' lit' : ''}"><div class="codex-art">${svgOf(e.art, lit)}</div><div class="codex-name">${e.name}</div></div>`;
-    }).join('') + '</div><div class="codex-foot">B 关闭</div>';
+    }).join('') + '</div><div class="codex-foot">B / Esc 关闭</div>';
 }
 
-let open = false;
+// 打开 / 关闭（按键由 menu.js 统一处理）
 function toggleCodex(force) {
-  open = force ?? !open;
-  if (open) render();
-  el.classList.toggle('open', open);
+  uiState.codex = force ?? !uiState.codex;
+  if (uiState.codex) render();
+  el.classList.toggle('open', uiState.codex);
 }
 // 发现新建筑时，如果图鉴开着就刷新
-function refreshCodex() { if (open) render(); }
-
-addEventListener('keydown', e => {
-  if (e.key === 'b' || e.key === 'B') toggleCodex();
-  if (e.key === 'Escape' && open) toggleCodex(false);
-});
+function refreshCodex() { if (uiState.codex) render(); }
+// 点击图鉴外的空白处关闭
+el.addEventListener('pointerdown', e => { if (e.target === el) toggleCodex(false); });
 
 export { toggleCodex, refreshCodex };
