@@ -3,10 +3,10 @@ import { clock, camera, scene } from './core.js';
 import { hintEl, toast, uiState } from './ui.js';
 import { U, addRipple } from './water.js';
 import { S, addVoxel, blocked, framePoints, grid, key, resetAll, tmpW, toWorld, updateBounds, voxels } from './world.js';
-import { sfx } from './audio.js';
-import { REACT, setLevelState } from './features.js';
-import { discover, markProgress } from './progress.js';
-import { glows } from './overlays.js';
+import { panOf, sfx } from './audio.js';
+import { setLevelState } from './features.js';
+import { markProgress } from './progress.js';
+import { flashes, glows } from './overlays.js';
 import { addItem, inv, setItems } from './hotbar.js';
 import { voxelBoat, voxelHouse, voxelLamp } from './models.js';
 
@@ -16,6 +16,8 @@ import { voxelBoat, voxelHouse, voxelLamp } from './models.js';
 // → 在塔顶放方块把灯顶高（或把灯收起来，放到自己搭的塔上）→ 灯照到船就点亮，船回港
 // → 灯光驱散雾，第二座岛和它的船出现：这里没有塔，灯掉在海滩上，西边有岩脊挡着
 // → 玩家自己选地方搭塔、放灯，照到第二条船 → 两条船都回港，找回第一种颜色
+// 循环：听见（雾里船的钟声，带方位）→ 看见（熄灭的灯）→ 动手（搭高 / 搬灯）→ 规则（灯照到船）
+//       → 回应（灯变暖黄 = 全场唯一的颜色、管钟一声、船回应一声、灯光推开雾）→ 船回港
 // 规则只有一条，在哪里都一样：灯照得到船就会亮（灯越高照得越远，会被挡住）
 
 const C = h => new THREE.Color(h);
@@ -136,15 +138,21 @@ function check() {
   refresh();
 }
 
-function lampTower(l) { let y = l.y - 1; while (S(l.x, y - 1, l.z)) y--; const bottom = Math.max(1, y); return { x: l.x, z: l.z, bottom, top: l.y, h: l.y - bottom + 1 }; }
+function lampTower(l) { let y = l.y - 1; while (S(l.x, y - 1, l.z)) y--; const bottom = Math.max(1, y); return { x: l.x, z: l.z, bottom, top: l.y, h: l.y - bottom + 1, noPaint: true }; }
 
 function lightLamp(l, b) {
   l.lit = true;
   l.mesh.userData.glass.material = litGlass;
   b.saved = true;
-  REACT.tower(lampTower(l));                             // 塔身闪亮、钟声、涟漪
   const sup = grid.get(key(l.x, l.y - 1, l.z));
   if (sup) toWorld(sup, tmpW); else tmpW.set(l.x, 0, l.z);
+  // 回应：塔身从上到下闪一遍、灯用管钟响一声，船隔着雾回应一声
+  const tw = lampTower(l);
+  for (let y = tw.top - 1; y >= tw.bottom; y--) { const v = grid.get(key(l.x, y, l.z)); if (v) flashes.push({ v, t0: clock.elapsedTime + (tw.top - y) * 0.05 }); }
+  addRipple(tmpW.x, tmpW.z, 0.3);
+  sfx.instNote('bell', 7, panOf(tmpW));
+  const bw = { x: b.cur.x, y: 0, z: b.cur.z };
+  setTimeout(() => sfx.boatBell(panOf(v3.set(bw.x, 0, bw.z)), false), 900);
   lights.push({ i: lights.length, x: tmpW.x, z: tmpW.z, t0: clock.elapsedTime });
   setTimeout(() => { b.t0 = clock.elapsedTime; }, 1500);   // 小船看到灯光，开始回港
   markProgress();
@@ -156,8 +164,7 @@ function lightLamp(l, b) {
     revealAt = Math.hypot(c.x - tmpW.x, c.z - tmpW.z) - 4;
   } else if (boats.every(b => b.saved)) {
     stage = 2;
-    setTimeout(() => discover('tower', tmpW.x, tmpW.z, { seed: false, toast: false }), 1500);
-    setTimeout(() => toast('找回了第一种颜色'), 3500);
+    setTimeout(() => toast('找回了第一种颜色'), 3000);   // 颜色只属于灯：世界保持黑白灰
   }
 }
 
@@ -273,6 +280,10 @@ function updateLevel(t, dt) {
     b.mesh.rotation.set(Math.sin(t * 0.7 + b.i) * 0.05, Math.atan2(d.to.x - d.from.x, d.to.z - d.from.z), Math.sin(t * 0.9 + 1 + b.i) * 0.06);
     U.uLights.value[4 + b.i].set(b.cur.x, b.cur.z, b.hidden ? -99 : BOAT_CLEAR, 0);
     const showQ = !b.hidden && !b.saved && !uiState.title;   // 问号：被照到之前一直闪
+    if (showQ) {
+      b.bell = (b.bell ?? 2) - dt;
+      if (b.bell <= 0) { b.bell = 6 + Math.random() * 2; sfx.boatBell(panOf(v3.set(b.cur.x, 0, b.cur.z)), true); }
+    }
     b.q.style.display = showQ ? 'block' : 'none';
     if (showQ) toScreen(v3.set(b.cur.x, 1.6, b.cur.z), b.q);
   }

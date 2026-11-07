@@ -288,6 +288,13 @@ const sfx = (() => {
       o.start(t); o.stop(t + 3.1);
       register(g, nodes, [o], t + 3.1);
     },
+    // 船的钟声：两下清脆的小钟；far 时经过低通，像隔着雾
+    boatBell(pan, far = true) {
+      if (!ok()) return;
+      const t = now(), v = far ? 0.07 : 0.1;
+      fm(t, 659, pan, far, v, 3.5, 2, 0.4, 1.8);
+      fm(t + 0.32, 659, pan, far, v * 0.8, 3.5, 2, 0.4, 1.6);
+    },
     instNote(inst, step, pan, far = false) { if (ok()) tone(now(), noteFreq(step), pan, far, far ? 0.09 : 0.2, 1.5, inst); },
     tap(pan) { if (!ok()) return; const t = now(); bubble(t, pan, true, 180, 90, 0.3); splash(t, pan, 0.07); },
     tiny(pan) { if (ok()) bubble(now(), pan, false, 420 + Math.random() * 300, 800 + Math.random() * 400, 0.04); },
