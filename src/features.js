@@ -241,7 +241,10 @@ function applyColors() {
   }
   for (const st of features.stairs.values()) for (let i = 0; i < st.n; i++) paint(st.x + st.ax * i, st.y + i, st.z + st.az * i, PAL.stair);
   for (const tw of features.towers.values()) {
-    if (tw.noPaint) continue;              // 关卡的灯塔：塔身保持黑白灰
+    if (tw.col) {                          // 关卡的灯塔：塔身用这盏灯的颜色和白色交替成条纹
+      for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : tw.col);
+      continue;
+    }
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
   }

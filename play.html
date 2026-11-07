@@ -1333,7 +1333,10 @@ function applyColors() {
   }
   for (const st of features.stairs.values()) for (let i = 0; i < st.n; i++) paint(st.x + st.ax * i, st.y + i, st.z + st.az * i, PAL.stair);
   for (const tw of features.towers.values()) {
-    if (tw.noPaint) continue;              // 关卡的灯塔：塔身保持黑白灰
+    if (tw.col) {                          // 关卡的灯塔：塔身用这盏灯的颜色和白色交替成条纹
+      for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : tw.col);
+      continue;
+    }
     for (let y = tw.bottom; y < tw.top; y++) paint(tw.x, y, tw.z, Math.floor((tw.top - y - 1) / 2) % 2 ? PAL.towerWhite : PAL.towerRed);
     paint(tw.x, tw.top, tw.z, PAL.lamp);
   }
@@ -2343,7 +2346,7 @@ requestAnimationFrame(frame);
 // → 灯光驱散雾，第二座岛和它的船出现：这里没有塔，灯掉在海滩上，西边有岩脊挡着
 // → 玩家自己选地方搭塔、放灯，照到第二条船 → 两条船都回港，找回第一种颜色
 // 循环：听见（雾里船的钟声，带方位）→ 看见（熄灭的灯）→ 动手（搭高 / 搬灯）→ 规则（灯照到船）
-//       → 回应（灯变暖黄 = 全场唯一的颜色、管钟一声、船回应一声、灯光推开雾）→ 船回港
+//       → 回应（灯变暖黄、塔身染成灯的颜色、管钟一声、船回应一声、灯光推开雾）→ 船回港
 // 规则只有一条，在哪里都一样：灯照得到船就会亮（灯越高照得越远，会被挡住）
 
 const C = h => new THREE.Color(h);
@@ -2400,6 +2403,7 @@ const ISLANDS = [
 
 // ———— 模型：灯、房子、小船都是小体素模型（见 models.js），灰色，挂在所在物块上随岛浮动 ————
 const litGlass = new THREE.MeshBasicMaterial({ color: 0xffd34d });
+const LAMP_TINT = new THREE.Color(0xe0a63a);          // 点亮后塔身条纹的颜色（第一种灯：琥珀黄）
 const makeLamp = () => voxelLamp();
 const makeHouse = def => voxelHouse(def);
 function makeBoat() { const g = voxelBoat(); g.renderOrder = 5; scene.add(g); return g; }
@@ -2464,7 +2468,7 @@ function check() {
   refresh();
 }
 
-function lampTower(l) { let y = l.y - 1; while (S(l.x, y - 1, l.z)) y--; const bottom = Math.max(1, y); return { x: l.x, z: l.z, bottom, top: l.y, h: l.y - bottom + 1, noPaint: true }; }
+function lampTower(l) { let y = l.y - 1; while (S(l.x, y - 1, l.z)) y--; const bottom = Math.max(1, y); return { x: l.x, z: l.z, bottom, top: l.y, h: l.y - bottom + 1, col: LAMP_TINT }; }
 
 function lightLamp(l, b) {
   l.lit = true;
